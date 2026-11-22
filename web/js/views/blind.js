@@ -97,6 +97,7 @@ export function levelState(reps) {
 
 const MEMO = [
   { value: 0, label: "Until first move" },
+  { value: 3, label: "3 s" },
   { value: 5, label: "5 s" },
   { value: 10, label: "10 s" },
   { value: 20, label: "20 s" },
