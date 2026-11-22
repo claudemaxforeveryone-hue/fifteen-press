@@ -1,0 +1,29 @@
+{
+  "name": "fifteen-press",
+  "productName": "Fifteen Press",
+  "version": "5.6.0",
+  "description": "The 15 puzzle, with an optimal solver, seed lab, stats, leaderboards and solve analysis.",
+  "main": "desktop/main.js",
+  "author": "Fifteen Press",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "45.2.1",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "press.fifteen.app",
+    "productName": "Fifteen Press",
+    "files": ["desktop/**", "web/**", "package.json"],
+    "win": {
+      "target": [{ "target": "portable", "arch": ["x64"] }],
+      "icon": "icon.ico"
+    },
+    "portable": {
+      "artifactName": "FifteenPress-portable-v${version}.exe"
+    }
+  }
+}

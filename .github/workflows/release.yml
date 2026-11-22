@@ -1,0 +1,38 @@
+name: Release
+
+# Builds the portable Windows exe and attaches it to a release.
+# Runs when a tag like v5.6.0 is pushed, or by hand from the Actions tab.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, for example v5.6.0
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npx electron-builder --win portable --x64 --publish never
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          ls -l dist
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "Fifteen Press ${TAG#v}" \
+              --notes "Download the exe below and double-click it. Nothing to install. Windows will warn that it is not signed: click More info, then Run anyway. Details are in the README."
+          fi
+          gh release upload "$TAG" dist/*.exe --clobber
