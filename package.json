@@ -1,7 +1,7 @@
 {
   "name": "fifteen-press",
   "productName": "Fifteen Press",
-  "version": "5.6.1",
+  "version": "5.6.2",
   "description": "The 15 puzzle, with an optimal solver, seed lab, stats, leaderboards and solve analysis.",
   "main": "desktop/main.js",
   "author": "Fifteen Press",

@@ -73,6 +73,8 @@ export function linkMoves(t, done = 0) {
 
 const flat = (parts) => parts.flatMap((p) => p.moves);
 const same = (a, b) => a.every((v, i) => v === b[i]);
+/** Everything one finished link can be: the twelve runs, and the two ways round for 11 and 12. */
+const LINKS = [...Object.values(RUN), INTO_11, INTO_12];
 function run(board, moves) {
   const b = board.slice();
   for (const m of moves) E.applyMove(b, N, m);
@@ -876,6 +878,9 @@ export class ChainTrainer {
     } else if (key === "c" || key === "p") {
       e.preventDefault();
       this.peek();
+    } else if (key === "z" || key === "Backspace") {
+      e.preventDefault();
+      this.solveUndo();
     } else if (key === "g") {
       e.preventDefault();
       if (this.stage === "moves" && !this.testing) this.toggleGot(this.num);
@@ -1492,6 +1497,10 @@ export class ChainTrainer {
     this.at = 0;
     this.count = 0;
     this.peeks = 0;
+    // undo: the board at the end of every link you finished, the scramble first
+    this.done = [this.board.slice()];
+    this.loose = 0; // moves made since the last of those
+    this.undos = 0;
     this.memoMs = 0;
     this.result = null;
     this.phase = "ready";
@@ -1561,14 +1570,21 @@ export class ChainTrainer {
       );
       if (o.help) chainLine();
       if (o.help) movesLine();
-      this.setControls(o.see !== "open" ? this.btn("Peek", "C", () => this.peek()) : null, h("span", { class: "spacer" }), this.btn("Give up", "Esc", () => this.giveUp()));
+      this.setControls(
+        this.loose || this.done.length > 1 ? this.btn("Undo", "Z", () => this.solveUndo()) : null,
+        o.see !== "open" ? this.btn("Peek", "C", () => this.peek()) : null,
+        h("span", { class: "spacer" }),
+        this.btn("Give up", "Esc", () => this.giveUp()),
+      );
     } else {
       const r = this.result;
       this.lookNow = "open";
       this.look("open");
       this.head(
         r.ok ? (r.real ? "A real blindfold solve" : "Solved") : "Did not finish",
-        r.ok ? `${fmtTime(r.ms)} in total: ${fmtTime(r.memo)} to memorise, ${fmtTime(r.exec)} and ${r.m} moves to solve.` : `${15 - r.left} of 15 tiles were home.`,
+        r.ok
+          ? `${fmtTime(r.ms)} in total: ${fmtTime(r.memo)} to memorise, ${fmtTime(r.exec)} and ${r.m} moves to solve` + (r.un ? `, with ${r.un} undo${r.un > 1 ? "s" : ""}.` : ".")
+          : `${15 - r.left} of 15 tiles were home.`,
       );
       chainLine();
       this.setControls(this.btn("Next scramble", "Space", () => this.space(), "btn--primary"), this.btn("Same again", "R", () => this.again()));
@@ -1584,10 +1600,42 @@ export class ChainTrainer {
     if (!this.raf) this.startClock(performance.now());
     this.movesEl.textContent = String(this.count);
     if (E.isSolved(this.board)) return this.solveEnd(true);
+    // a link is finished when the empty spot is home and the board is one whole link away from the last finished one
+    const last = this.done[this.done.length - 1];
+    this.loose++;
+    if (this.board[N * N - 1] === 0) {
+      if (same(this.board, last)) this.loose = 0;
+      else if (LINKS.some((m) => same(this.board, run(last, m)))) {
+        this.done.push(this.board.slice());
+        this.loose = 0;
+      }
+    }
     if (this.at < this.chain.length && same(this.board, this.stops[this.at + 1])) {
       this.at++;
       this.paintSolve();
-    } else if (this.count === 1) this.paintSolve();
+    } else if (this.count === 1 || this.loose <= 1) this.paintSolve();
+  }
+
+  /**
+   * Undo: back to where the number you are on started. Pressed again right away, it takes back
+   * the number before that. The clock keeps running and the moves you made stay counted.
+   */
+  solveUndo() {
+    if (this.stage !== "solve" || this.phase !== "solve") return;
+    const d = this.done;
+    if (!this.loose) {
+      if (d.length < 2) return audio.bump();
+      d.pop();
+    }
+    this.board = d[d.length - 1].slice();
+    this.loose = 0;
+    this.undos++;
+    this.view.set(this.board, N, { instant: true });
+    const i = this.stops.findIndex((b) => same(b, this.board));
+    if (i >= 0) this.at = i;
+    audio.thunk();
+    toast(d.length > 1 ? `Undone. ${d.length - 1} number${d.length > 2 ? "s" : ""} of your list ${d.length > 2 ? "are" : "is"} done, you are on number ${d.length}.` : "Undone. You are back at the scramble, on the first number of your list.");
+    this.paintSolve();
   }
 
   solvePeek() {
@@ -1611,7 +1659,7 @@ export class ChainTrainer {
     let left = 0;
     for (let i = 0; i < 15; i++) if (this.board[i] !== i + 1) left++;
     const real = ok && o.see === "dark" && !o.help && !this.peeks;
-    this.result = { ok, real, ms: this.memoMs + exec, memo: this.memoMs, exec, m: this.count, left };
+    this.result = { ok, real, ms: this.memoMs + exec, memo: this.memoMs, exec, m: this.count, left, un: this.undos };
     this.phase = "done";
     this.at = ok ? this.chain.length : this.at;
     this.clockEl.textContent = ((this.memoMs + exec) / 1000).toFixed(2);
@@ -1623,6 +1671,7 @@ export class ChainTrainer {
       exec,
       m: this.count,
       pk: this.peeks,
+      un: this.undos,
       see: o.see,
       help: o.help ? 1 : 0,
       len: o.len,
@@ -1653,6 +1702,11 @@ export class ChainTrainer {
           "p",
           { class: "hint-text" },
           "Start with the numbers shown and the chain on screen, so you see what each link does. Then hide the numbers, then drop the chain. Board covered with no chain is the real thing.",
+        ),
+        h(
+          "p",
+          { class: "hint-text" },
+          "Lost in the middle of a number? Undo (Z) puts the board back to where that number started, and tells you which number of your list you are on. Press it again to take back the number before.",
         ),
       ),
     );
