@@ -6,7 +6,7 @@ detailed stats, and a full trainer for solving it blindfolded.
 ## Download
 
 1. Go to [Releases](../../releases/latest).
-2. Download `FifteenPress-portable-v5.6.0.exe`.
+2. Download `FifteenPress-portable-v5.6.1.exe`.
 3. Double-click it. There is nothing to install.
 
 Windows 10 or 11, 64-bit.
@@ -29,7 +29,7 @@ run it. In that case use "Run from source" below.
 - **Stats**: averages, records and charts.
 - **Blind**: memorise the scramble, then solve with the numbers hidden. It has free
   play, a 20 level progression, and a trainer for the chain method (a step by step
-  lesson, the shortest run of moves for every number with path maps, a random test,
+  lesson, one run of moves for every number with path maps, a random test,
   then full blind solves).
 - **Lab, Proofs, Leaders**: a seed lab, optimal solutions for any position, and
   local leaderboards.

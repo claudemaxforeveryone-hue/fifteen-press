@@ -34,26 +34,29 @@ const INTO_11 = parse("D R U L");
 /** And this way round the start tile goes to spot 12, 12 to 11, 11 to the start spot. */
 const INTO_12 = parse("R D L U");
 /**
- * The shortest run of moves for every other number, checked with the solver. A run trades the
+ * The run of moves for every other number: bring the target tile next to the corner, trade, walk back, trade,
+ * with every move that cancels left out. Checked against the solver (LONGER lists the ones it can beat). A run trades the
  * tile in the start spot (spot 15) with the tile in that number's spot, and trades spots 11 and 12.
  */
 const RUN = {
-  1: "D3 R3 U L D L U3 R D L D R U2 L D3 R U R D L3 U3 R D L U", // 38
-  2: "D2 R U2 R D L D R D L U R U2 L D3 R U L2 U2 R D L U", // 30
-  3: "D R D2 R U2 L D L U R U L D2 R U R D2 L U3 L", // 26
+  1: "D3 R3 U L D L U R U L D L U R U L D2 R U R D L D R U R D L3 U2 R U L", // 40
+  2: "D2 R2 D L U R U L D L U R U L D2 R U R D L D R U L2 U R U L", // 32
+  3: "D2 R D R U2 L D L U R U L D2 R U R D2 L U L U R U L", // 28
   4: "D3 R U2 L D R U2 L D R D L U R D2 L U2 R U L", // 26
-  5: "D2 R U2 R D2 R U L2 D R U R D L U2 L D2 L U2 R D L U", // 30
-  6: "D2 R U2 R D L D R U2 L D2 L U2 R D L U", // 22
+  5: "R D2 R2 U L D L U R U L2 D R U R D L D R U R D L2 U2 L D R U L", // 34
+  6: "D2 R2 U L D L U R U L D2 R U R D L2 U R U L", // 24
   7: "D R D L U R U L D2 R U2 L", // 14
   8: "D2 R U2 L D R D L U R U L", // 14
-  9: "D2 R2 U R U L2 D R U R D L D L2 U2 R D L U", // 24
+  9: "R D R2 D L2 U R U L2 D R U R D L D R2 U L2 U L D R U L", // 30
   10: "R D R U L2 D R U R D L U L D R U L", // 18
-  13: "D2 R2 U2 R D L U L D R2 U L D2 L2 U2 R D L U", // 26
+  13: "R3 D L U L D R U L2 D R U R D L U R D R U L3 D R U L", // 30
   14: "R2 D L U L D R2 U L2 D R U L", // 16
 };
 for (const k of Object.keys(RUN)) RUN[k] = parse(RUN[k]);
+/** Runs a little longer than the solver's shortest, kept because they are easier to remember: number -> shortest length. */
+const LONGER = { 1: 38, 2: 30, 3: 26, 5: 30, 6: 22, 9: 24, 13: 26 };
 /** Shortest runs first: the order to learn them in, and the spots a new chain starts on. */
-const ORDER = [8, 7, 14, 10, 6, 9, 4, 3, 13, 2, 5, 1, 11, 12];
+const ORDER = [8, 7, 14, 10, 6, 4, 3, 13, 9, 2, 5, 1, 11, 12];
 
 /**
  * The moves for one link of the chain.
@@ -241,7 +244,7 @@ function lessonSteps() {
   );
   steps.push({
     title: "That is the whole method",
-    text: "So the real work is one run per number, learned once. They are the shortest ones there are: 8 and 7 take 14 moves, 14 takes 16. 1 Moves teaches them one at a time with a map of the path, and Test checks the ones you ticked.",
+    text: "So the real work is one run per number, learned once. They are short: 8 and 7 take 14 moves, 14 takes 16. 1 Moves teaches them one at a time with a map of the path, and Test checks the ones you ticked.",
     board: b,
     list,
     listAt: 4,
@@ -487,7 +490,7 @@ export class ChainTrainer {
         li("The empty spot stays in the bottom right corner. The spot left of it, where 15 lives, is the start spot (the buffer)."),
         li("Read the tile in the start spot. Its number is the first link of your chain."),
         li("Look at that number's home and read the tile sitting there. That is the next link. Keep going until every tile is covered."),
-        li("To solve, do the run of moves for each link in order. Each run sends the start spot's tile home. The runs are the shortest ones there are."),
+        li("To solve, do the run of moves for each link in order. Each run sends the start spot's tile home."),
         li("Every run also trades spots 11 and 12. So when 11 or 12 is an odd link (1st, 3rd, 5th) it goes to the other one's spot, and as an even link to its own."),
       ),
       h(
@@ -986,6 +989,8 @@ export class ChainTrainer {
         this.shown
           ? special
             ? "Four moves. Follow the arrows."
+            : LONGER[t]
+            ? `Follow the arrows. ${total} moves.`
             : `Follow the arrows. ${total} moves, the shortest way there is.`
           : `Do the moves for ${t} from memory. It stops by itself when you get it right.`,
       );
@@ -1186,7 +1191,7 @@ export class ChainTrainer {
           { class: "hint-text" },
           testing
             ? "Click a number to put it in the test or take it out. The test asks every ticked number once, in random order."
-            : `Pick a number. Tick it (G) when you think you have it, then Test asks every ticked one at random. It counts as learned after ${LEARNED} in a row from memory. Shortest first: 8, 7, 14, 10, then 6, 9, 4, 3, 13, then 2, 5, 1, and 11 and 12 last.` +
+            : `Pick a number. Tick it (G) when you think you have it, then Test asks every ticked one at random. It counts as learned after ${LEARNED} in a row from memory. Shortest first: 8, 7, 14, 10, then 6, 4, 3, 13, then 9, 2, 5, 1, and 11 and 12 last.` +
                 (next ? ` Next up: ${next}.` : " All done: go to stage 2."),
         ),
       ),
@@ -1223,7 +1228,8 @@ export class ChainTrainer {
         h(
           "p",
           { class: "hint-text" },
-          `What this run does: the tile in the start spot and the tile in spot ${t} trade places, and 11 and 12 trade too. ${this.seq.length} moves, and no shorter way exists.`,
+          `What this run does: the tile in the start spot and the tile in spot ${t} trade places, and 11 and 12 trade too. ${this.seq.length} moves` +
+            (LONGER[t] ? `. A ${LONGER[t]} move way exists, but this one is easier to remember.` : ", and no shorter way exists."),
         ),
       );
     // the path as maps. From memory they stay hidden until the try is over
