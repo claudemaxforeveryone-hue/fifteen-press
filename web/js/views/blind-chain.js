@@ -1566,12 +1566,13 @@ export class ChainTrainer {
       this.look(this.lookNow);
       this.head(
         "Solving",
-        (o.help ? `Do the moves for ${this.at < n ? this.chain[this.at] : "the last link"}. ` : "One link at a time. ") + "It stops by itself when the board is solved.",
+        (o.help ? `Do the moves for ${this.at < n ? this.chain[this.at] : "the last link"}. ` : "One link at a time. ") +
+          "It stops by itself when the board is solved. Lost? Z takes you back to the start of the number you are on.",
       );
       if (o.help) chainLine();
       if (o.help) movesLine();
       this.setControls(
-        this.loose || this.done.length > 1 ? this.btn("Undo", "Z", () => this.solveUndo()) : null,
+        this.btn("Undo", "Z", () => this.solveUndo()),
         o.see !== "open" ? this.btn("Peek", "C", () => this.peek()) : null,
         h("span", { class: "spacer" }),
         this.btn("Give up", "Esc", () => this.giveUp()),
@@ -1624,7 +1625,10 @@ export class ChainTrainer {
     if (this.stage !== "solve" || this.phase !== "solve") return;
     const d = this.done;
     if (!this.loose) {
-      if (d.length < 2) return audio.bump();
+      if (d.length < 2) {
+        audio.bump();
+        return toast("Nothing to undo yet");
+      }
       d.pop();
     }
     this.board = d[d.length - 1].slice();

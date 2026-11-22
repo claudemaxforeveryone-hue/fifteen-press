@@ -447,6 +447,7 @@ export class BlindView {
     g.on((type, data) => {
       if (type === "start") this.onFirstMove();
       if (type === "move") this.onMove(data);
+      if (type === "undo") this.onUndo();
       if (type === "solved") this.end(true);
     });
     this.view.fast = false;
@@ -519,11 +520,12 @@ export class BlindView {
           ? "Press Enter when you think it is solved."
           : lv
             ? `It stops by itself when ${lv.stop}.`
-            : "It stops by itself when the board is solved.");
+            : "It stops by itself when the board is solved.") +
+        " Z takes back your last move.";
     } else if (r && r.ok) {
       const next = this.justPassed ? LEVELS[this.justPassed.id] : null;
       title = this.justPassed ? `Level ${this.justPassed.id} passed` : lv && lv.tiles.length < 15 ? "Done" : "Solved";
-      hint = `${fmtTime(r.ms)} in total: ${fmtTime(r.memo)} to memorise, ${fmtTime(r.exec)} to solve.`;
+      hint = `${fmtTime(r.ms)} in total: ${fmtTime(r.memo)} to memorise, ${fmtTime(r.exec)} to solve${r.un ? `, ${r.un} move${r.un > 1 ? "s" : ""} taken back` : ""}.`;
       if (this.justPassed)
         hint += next
           ? ` Next is level ${next.id}: ${next.name}, ${LIGHTS[next.lights].toLowerCase()}.`
@@ -551,6 +553,7 @@ export class BlindView {
       );
     else if (p === "hidden" || p === "solve") {
       if (p === "solve" && o.finish === "call") this.controls.append(btn("Done", "Enter", () => this.call(), "btn--primary"));
+      this.controls.append(btn("Undo", "Z", () => this.undo()));
       if (o.peeks !== 0) {
         const left = o.peeks < 0 ? null : o.peeks - this.peeks;
         const b = btn(left == null ? "Peek" : `Peek (${left} left)`, "C", () => this.peek());
@@ -616,6 +619,25 @@ export class BlindView {
     this.paintFlash();
     // the home ping would give positions away when home tiles are not lit
     audio.tock({ tile: data.tile, col: data.to % g.N, N: g.N, home: (this.lights === "on" || this.lights === "flash") && home });
+  }
+
+  /** Undo: take back the last move. The clock keeps running. */
+  undo() {
+    const g = this.game;
+    if (this.phase !== "hidden" && this.phase !== "solve") return;
+    if (!g || !g.undo()) {
+      audio.bump();
+      toast("Nothing to undo yet");
+    }
+  }
+
+  onUndo() {
+    const g = this.game;
+    this.view.set(g.board, g.N);
+    if (!this.opts.hideClock) this.movesEl.textContent = String(g.moves.length);
+    this.flashing.clear();
+    this.paintFlash();
+    audio.tock({ tile: 1, col: g.blank() % g.N, N: g.N, home: false });
   }
 
   /** Lights blink: a tile that just landed home shows its home colour for a moment, then goes dark. */
@@ -699,6 +721,7 @@ export class BlindView {
       retry: this.retry ? 1 : 0,
       left,
     };
+    if (g.undos) rep.un = g.undos;
     if (lv) rep.lv = lv.id;
     this.flashing.clear();
     this.result = rep;
@@ -768,6 +791,9 @@ export class BlindView {
     } else if (key === "c" || key === "p") {
       e.preventDefault();
       this.peek();
+    } else if (key === "z" || key === "Backspace") {
+      e.preventDefault();
+      this.undo();
     } else if (key === "Enter") {
       if (this.phase === "solve" && this.opts.finish === "call") {
         e.preventDefault();

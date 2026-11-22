@@ -10,7 +10,7 @@ import { METHODS } from "../steps.js";
 import { COACH_TARGETS, COACH_LEVELS } from "../coach.js";
 
 const E = window.FifteenEngine;
-const VERSION = "5.6.2";
+const VERSION = "5.6.3";
 
 /* The page shows the handful of choices most people make. Everything else sits behind a "more" line
    in the group it belongs to, so nothing is lost and nothing has to be read to get started. */
