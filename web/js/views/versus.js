@@ -1,26 +1,32 @@
 // 1v1: two players, one room code, the same scramble, a running score.
 // The two apps talk straight to each other over WebRTC. The public PeerJS broker only introduces them,
 // so there is no server of ours, no account and nothing stored anywhere but this device.
-import { h, clear, toast, seg, copyText } from "../ui.js";
+// Around the race: a friends list with one press challenges, engine opponents, two ratings and the race log.
+import { h, clear, toast, seg, copyText, confirmAction, relDate } from "../ui.js";
 import { Game } from "../game.js";
 import { BoardView } from "../board-view.js";
 import { fmtTime } from "../stats.js";
+import { lineChart } from "../charts.js";
 import * as audio from "../audio.js";
+import * as D from "../versus-data.js";
+import { BOTS, nearestBot, typicalMs, planRace, BotRun } from "../versus-bots.js";
+import { Presence, loadPeer, brokerOptions } from "../versus-friends.js";
+import { notice, confetti, countTo } from "../versus-fx.js";
 
 const E = window.FifteenEngine;
 
 // the link a friend can open in any browser (the desktop app has no web address of its own)
 const INVITE_BASE = "https://claudemaxforeveryone-hue.github.io/fifteen-press/";
 const ID_PREFIX = "fifteen-press-1v1-";
-const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0 O 1 I L
 const CODE_LEN = 5;
-const LEAD = 3000; // countdown before the board shows
-const RECORD_KEY = "fifteen.versus.v1";
-const PROTOCOL = 1;
+const PROTOCOL = 2; // 1 = 5.7.0: no room options, no ratings
 const CHATTER = new Set(["hb", "p", "ack", "ping", "pong"]); // fine to lose one of these
 const RESEND = 600; // an unconfirmed message goes out again after this long
 const BEAT = 2000; // each side says "still here" this often
 const SILENCE = 12000; // and gives up on a line that has been quiet this long
+const LEGACY_ROOM = { to: 0, lead: 3, peek: false, rated: false };
+
+const makeCode = () => D.randomCode(CODE_LEN);
 
 // one id per tab, kept across a reload, so a friend who drops can take their seat back
 function clientId() {
@@ -41,45 +47,13 @@ const KEYMAP = {
   blank: { ArrowLeft: 2, ArrowRight: 3, ArrowUp: 0, ArrowDown: 1, a: 2, d: 3, w: 0, s: 1 },
 };
 
-let peerLib = null;
-function loadPeer() {
-  if (window.Peer) return Promise.resolve(window.Peer);
-  if (!peerLib)
-    peerLib = new Promise((resolve, reject) => {
-      const s = document.createElement("script");
-      s.src = "js/vendor/peerjs.min.js";
-      s.onload = () => (window.Peer ? resolve(window.Peer) : reject(new Error("PeerJS did not load")));
-      s.onerror = () => {
-        peerLib = null;
-        reject(new Error("PeerJS did not load"));
-      };
-      document.head.appendChild(s);
-    });
-  return peerLib;
-}
-
-// a test can point the handshake at its own broker: localStorage "fifteen.versus.broker" = {host, port, path, secure}
-function brokerOptions() {
-  try {
-    const raw = localStorage.getItem("fifteen.versus.broker");
-    if (raw) return JSON.parse(raw);
-  } catch (e) {
-    /* default broker */
-  }
-  return {};
-}
-
-function makeCode() {
-  let out = "";
-  const buf = new Uint32Array(CODE_LEN);
-  crypto.getRandomValues(buf);
-  for (let i = 0; i < CODE_LEN; i++) out += CODE_CHARS[buf[i] % CODE_CHARS.length];
-  return out;
-}
 function cleanCode(text) {
   // a pasted invite link works as well as the bare code
   const m = /versus\/([A-Za-z0-9]+)/.exec(String(text || ""));
-  return (m ? m[1] : String(text || "")).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12);
+  return (m ? m[1] : String(text || ""))
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 12);
 }
 function isBoard(b, N) {
   if (!Array.isArray(b) || b.length !== N * N) return false;
@@ -88,23 +62,19 @@ function isBoard(b, N) {
   for (let i = 0; i < b.length; i++) if (!seen.has(i)) return false;
   return true;
 }
-function cleanName(text) {
-  return String(text || "").replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, 20);
-}
+const cleanName = D.cleanName;
+const signed = (n) => (n > 0 ? "+" + n : String(n));
+const about = (ms) => (ms < 10000 ? (ms / 1000).toFixed(1) : String(Math.round(ms / 1000))) + " s";
+const roomWords = (room) => [`${room.N}x${room.N}`, room.to ? `first to ${room.to}` : "single rounds", `${room.lead} s countdown`, room.peek ? "board shown early" : null, room.rated ? "rated" : "not rated"].filter(Boolean).join(" · ");
 
-function loadRecord() {
-  try {
-    return JSON.parse(localStorage.getItem(RECORD_KEY)) || {};
-  } catch (e) {
-    return {};
-  }
-}
-function saveRecord(rec) {
-  try {
-    localStorage.setItem(RECORD_KEY, JSON.stringify(rec));
-  } catch (e) {
-    /* private window: the score for this sitting still shows */
-  }
+function toggle(label, value, onChange, hint, disabled) {
+  const cb = h("input", { type: "checkbox", checked: !!value, disabled: !!disabled });
+  cb.addEventListener("change", () => onChange(cb.checked));
+  // a mouse click should not leave the box holding the keyboard: Space is "ready" in a room
+  cb.addEventListener("click", (e) => {
+    if (e.detail > 0) cb.blur();
+  });
+  return h("label", { class: "switch-row" }, cb, h("span", { class: "switch-text" }, label, hint ? h("small", null, hint) : null));
 }
 
 export class VersusView {
@@ -112,24 +82,46 @@ export class VersusView {
     this.root = root;
     this.ctx = ctx;
     this.store = ctx.store;
+    this.data = D.load();
     this.phase = "lobby"; // lobby | opening | waiting | idle | countdown | racing
+    this.tab = "friends"; // friends | engines | stats | options
+    this.statsOf = "all";
     this.role = null; // host | guest
     this.code = "";
     this.peer = null;
     this.conn = null;
-    this.N = 4;
+    this.bot = null; // the engine in the other seat, when there is one
+    this.room = D.cleanRoom(this.data.room);
     this.myName = "";
     this.oppName = "";
+    this.oppFc = "";
+    this.oppElo = null;
+    this.oppV = PROTOCOL;
     this.score = { me: 0, opp: 0 };
     this.rounds = [];
     this.round = null;
+    this.matchOver = null;
     this.readyMe = false;
     this.readyOpp = false;
     this.rtt = 0;
     this.note = "";
     this.raf = 0;
     this.timers = new Set();
-    window.addEventListener("beforeunload", () => this.teardown(true));
+    this.asks = new Map(); // friend code -> the open challenge notice from them
+    this.presence = new Presence({
+      name: () => this.myName || this.defaultName(),
+      elo: () => this.data.elo.friends,
+      onChange: () => this.friendsChanged(),
+      onChallenge: (c) => this.incomingChallenge(c),
+      onAnswer: (a) => this.challengeAnswered(a),
+      onAdded: (a) => this.addedBy(a),
+    });
+    // with friends saved, be reachable from the moment the app opens, whatever page is showing
+    if (this.data.friends.length) setTimeout(() => this.presence.start(), 1500);
+    window.addEventListener("beforeunload", () => {
+      this.teardown(true);
+      this.presence.stop();
+    });
     // a mouse click should not leave a button holding the keyboard: Space is "ready" here
     root.addEventListener("click", (e) => {
       const b = e.target.closest && e.target.closest("button");
@@ -141,16 +133,44 @@ export class VersusView {
   get s() {
     return this.store.settings;
   }
+  get N() {
+    return this.room.N;
+  }
+  set N(n) {
+    this.room.N = n;
+  }
+  get prefs() {
+    return this.data.prefs;
+  }
+  // the options in force: a friend still on 5.7.0 only knows single rounds with a 3 second countdown
+  get rules() {
+    return this.role === "host" && !this.bot && this.oppV < 2 ? Object.assign({}, this.room, LEGACY_ROOM) : this.room;
+  }
+  sfx(name, ...args) {
+    if (this.prefs.sounds) audio[name](...args);
+  }
 
   /* ---------- router hooks ---------- */
 
   show(params) {
-    const code = cleanCode(params);
+    const p = String(params || "");
+    this.presence.retry();
+    if (/^add\//i.test(p)) {
+      const fc = D.cleanFriendCode("versus/" + p);
+      history.replaceState(null, "", "#versus");
+      this.tab = "friends";
+      if (fc) this.addFriendCode(fc);
+      else toast("That friend link does not look right.");
+      if (this.phase === "lobby") this.render();
+      return;
+    }
+    const code = cleanCode(p);
     if (code && this.phase === "lobby") {
       this.pendingCode = code;
+      this.tab = "friends";
       this.render();
       this.join(code);
-    } else if (!this.root.childElementCount) this.render();
+    } else if (!this.root.childElementCount || this.phase === "lobby") this.render();
   }
 
   hide() {
@@ -183,6 +203,7 @@ export class VersusView {
   send(msg) {
     const conn = this.conn;
     if (!conn || !conn.open) return;
+    if (conn.bot) return conn.send(msg);
     if (!CHATTER.has(msg.t)) {
       const link = conn.fifteen || (conn.fifteen = { seq: 0, unacked: new Map(), seen: new Set() });
       msg.q = ++link.seq;
@@ -219,15 +240,40 @@ export class VersusView {
   }
   readName() {
     const typed = this.nameInput ? cleanName(this.nameInput.value) : "";
-    this.myName = typed || this.defaultName();
+    const before = this.myName;
+    this.myName = typed || this.myName || this.defaultName();
     try {
       localStorage.setItem("fifteen.versus.name", this.myName);
     } catch (e) {
       /* no storage */
     }
+    if (before && before !== this.myName) this.presence.announce();
   }
   inviteLink() {
     return INVITE_BASE + "#versus/" + this.code;
+  }
+  friendLink() {
+    return INVITE_BASE + "#versus/add/" + this.data.fc;
+  }
+  saveRoom() {
+    this.data.room = Object.assign({}, this.room);
+    D.save();
+  }
+  resetSeat() {
+    this.role = null;
+    this.bot = null;
+    this.oppName = "";
+    this.oppCid = "";
+    this.oppFc = "";
+    this.oppElo = null;
+    this.oppV = PROTOCOL;
+    this.score = { me: 0, opp: 0 };
+    this.rounds = [];
+    this.matchOver = null;
+    this.readyMe = this.readyOpp = false;
+    this.pendingChallenge = "";
+    // a guest sat under the host's options: back to my own
+    this.room = D.cleanRoom(this.data.room);
   }
 
   /* ---------- lobby ---------- */
@@ -240,8 +286,84 @@ export class VersusView {
   renderLobby() {
     clear(this.root);
     this.view = this.oppView = null;
+    this.friendsEl = null;
+    const d = this.data;
+    const rating = (label, value) => h("div", { class: "stat vs-rating" }, h("div", { class: "label" }, label), h("div", { class: "figure tnum" }, value));
+    this.tabBody = h("div", { class: "vs-tab" });
+    this.root.append(
+      h(
+        "div",
+        { class: "vs-lobby" },
+        h(
+          "div",
+          { class: "page-head" },
+          h("div", null, h("div", { class: "label" }, "1v1"), h("h1", { class: "sub-title" }, "Race on the same scramble")),
+          h("div", { class: "vs-ratings" }, rating("rating vs friends", d.elo.friends), rating("rating vs engines", d.elo.engine)),
+        ),
+        h(
+          "div",
+          { class: "tabs vs-tabs" },
+          seg(
+            [
+              { value: "friends", label: "Friends" },
+              { value: "engines", label: "Engines" },
+              { value: "stats", label: "Stats" },
+              { value: "options", label: "Options" },
+            ],
+            this.tab,
+            (t) => {
+              this.tab = t;
+              this.renderTab();
+            },
+            "1v1 sections",
+          ),
+        ),
+        this.tabBody,
+      ),
+    );
+    this.renderTab();
+  }
+
+  renderTab() {
+    const body = clear(this.tabBody);
+    this.friendsEl = null;
+    this.lobbyNote = null;
+    this.nameInput = null;
+    this.codeInput = null;
+    if (this.tab === "engines") this.renderEngines(body);
+    else if (this.tab === "stats") this.renderStats(body);
+    else if (this.tab === "options") this.renderOptions(body);
+    else this.renderFriendsTab(body);
+  }
+
+  nameField() {
+    this.nameInput = h("input", {
+      type: "text",
+      maxlength: 20,
+      value: this.myName || this.defaultName(),
+      "aria-label": "Your name",
+      autocomplete: "off",
+      spellcheck: false,
+      onchange: () => this.readName(),
+    });
+    return h("label", { class: "field vs-field" }, h("span", null, "your name"), this.nameInput);
+  }
+
+  sizeSeg() {
+    return seg(
+      D.SIZES.map((n) => ({ value: n, label: `${n}x${n}` })),
+      this.N,
+      (n) => {
+        this.N = n;
+        this.saveRoom();
+        if (this.tab === "engines" && this.phase === "lobby") this.renderTab();
+      },
+      "Board size",
+    );
+  }
+
+  renderFriendsTab(body) {
     const busy = this.phase === "opening";
-    this.nameInput = h("input", { type: "text", maxlength: 20, value: this.myName || this.defaultName(), "aria-label": "Your name", autocomplete: "off", spellcheck: false });
     this.codeInput = h("input", {
       type: "text",
       class: "vs-code-input",
@@ -255,65 +377,361 @@ export class VersusView {
         if (e.key === "Enter") this.join(this.codeInput.value);
       },
     });
-    const rec = loadRecord();
-    const rivals = Object.entries(rec)
-      .sort((a, b) => (b[1].last || 0) - (a[1].last || 0))
-      .slice(0, 8);
-    this.root.append(
+    this.friendInput = h("input", {
+      type: "text",
+      class: "vs-code-input",
+      maxlength: 120,
+      placeholder: "friend code",
+      "aria-label": "A friend's code or friend link",
+      autocomplete: "off",
+      spellcheck: false,
+      onkeydown: (e) => {
+        if (e.key === "Enter") this.addFriendTyped();
+      },
+    });
+    this.friendsEl = h("div", { class: "vs-friends" });
+    body.append(
+      h("p", { class: "hint-text vs-lede" }, "One of you makes a room and sends the code, or challenges a friend from the list. You both get the same scramble after the countdown. Fastest solve takes the round."),
+      this.nameField(),
       h(
         "div",
-        { class: "vs-lobby" },
-        h("div", { class: "page-head" }, h("div", null, h("div", { class: "label" }, "1v1"), h("h1", { class: "sub-title" }, "Race a friend on the same scramble"))),
-        h("p", { class: "hint-text vs-lede" }, "One of you makes a room and sends the code. The board stays hidden through a 3 second countdown, then you both get the same scramble. Fastest solve takes the round."),
-        h("label", { class: "field vs-field" }, h("span", null, "your name"), this.nameInput),
+        { class: "vs-choices" },
         h(
           "div",
-          { class: "vs-choices" },
+          { class: "vs-choice" },
+          h("div", { class: "label" }, "start a room"),
+          h("div", { class: "row" }, this.sizeSeg()),
+          h("div", { class: "row" }, h("button", { class: "btn btn--primary", type: "button", disabled: busy, onclick: () => this.host() }, "Create room")),
+        ),
+        h(
+          "div",
+          { class: "vs-choice" },
+          h("div", { class: "label" }, "join a friend"),
+          h("div", { class: "row" }, this.codeInput),
+          h("div", { class: "row" }, h("button", { class: "btn", type: "button", disabled: busy, onclick: () => this.join(this.codeInput.value) }, "Join")),
+        ),
+      ),
+      (this.lobbyNote = h("p", { class: "vs-note", role: "status" }, this.note || (busy ? "Connecting…" : ""))),
+      h(
+        "div",
+        { class: "vs-section" },
+        h("div", { class: "label" }, "friends"),
+        this.friendsEl,
+        h(
+          "div",
+          { class: "vs-addfriend" },
           h(
             "div",
-            { class: "vs-choice" },
-            h("div", { class: "label" }, "start a room"),
-            h(
-              "div",
-              { class: "row" },
-              seg(
-                [3, 4, 5].map((n) => ({ value: n, label: `${n}x${n}` })),
-                this.N,
-                (n) => (this.N = n),
-                "Board size",
-              ),
-            ),
-            h("div", { class: "row" }, h("button", { class: "btn btn--primary", type: "button", disabled: busy, onclick: () => this.host() }, "Create room")),
+            { class: "vs-mycode" },
+            h("span", { class: "label" }, "your friend code"),
+            h("button", { class: "vs-codechip", type: "button", title: "copy your friend link", onclick: () => this.copyFriendLink() }, this.data.fc),
+            h("button", { class: "btn btn--ghost btn--small", type: "button", onclick: () => this.copyFriendLink() }, "Copy friend link"),
           ),
+          h("div", { class: "row" }, this.friendInput, h("button", { class: "btn btn--small", type: "button", onclick: () => this.addFriendTyped() }, "Add friend")),
+        ),
+      ),
+    );
+    this.renderFriends();
+  }
+
+  renderFriends() {
+    const el = this.friendsEl;
+    if (!el || !el.isConnected) return;
+    clear(el);
+    const d = this.data;
+    const p = this.presence;
+    const busy = this.phase !== "lobby" && this.phase !== "waiting";
+    if (!d.friends.length) {
+      el.append(h("p", { class: "hint-text" }, "Nobody yet. Send a friend your friend link, type their code below, or race someone with a room code and press Add friend in the room."));
+    } else {
+      const heads = new Map(D.rivals(d.log.filter((x) => x.k === "f")).map((r) => [r.id, r]));
+      el.append(
+        h(
+          "table",
+          { class: "ledger vs-friendlist" },
           h(
-            "div",
-            { class: "vs-choice" },
-            h("div", { class: "label" }, "join a friend"),
-            h("div", { class: "row" }, this.codeInput),
-            h("div", { class: "row" }, h("button", { class: "btn", type: "button", disabled: busy, onclick: () => this.join(this.codeInput.value) }, "Join")),
+            "tbody",
+            null,
+            d.friends.map((f) => {
+              const on = p.online(f.fc);
+              const rec = heads.get(f.fc);
+              return h(
+                "tr",
+                { "data-fc": f.fc },
+                h("td", { class: "vs-friend-name" }, h("span", { class: "vs-dot", "data-on": on ? "1" : null, title: on ? "online" : "offline" }), f.name || f.fc),
+                h("td", { class: "tnum vs-friend-elo" }, f.elo != null ? f.elo : ""),
+                h("td", { class: "tnum vs-friend-rec" }, rec ? `${rec.w} won, ${rec.l} lost` : ""),
+                h(
+                  "td",
+                  { class: "vs-friend-act" },
+                  on
+                    ? h("button", { class: "btn btn--small btn--primary", type: "button", disabled: busy, onclick: () => this.challengeFriend(f.fc) }, "Challenge")
+                    : h("span", { class: "hint-text" }, "offline"),
+                  h("button", { class: "btn btn--ghost btn--small", type: "button", onclick: () => this.removeFriendAsk(f) }, "Remove"),
+                ),
+              );
+            }),
           ),
         ),
-        (this.lobbyNote = h("p", { class: "vs-note", role: "status" }, this.note || (busy ? "Connecting…" : ""))),
-        rivals.length
-          ? h(
-              "div",
-              { class: "panel vs-rivals" },
-              h("div", { class: "label" }, "all time on this device"),
+      );
+    }
+    let state = "";
+    if (!this.prefs.online) state = "You are hidden: friends cannot see you or challenge you. Change it under Options.";
+    else if (p.state === "elsewhere") state = "Your friend code is already online in another window of Fifteen Press, so challenges arrive there.";
+    else if (p.state === "failed") state = "Could not reach the friends service. Room codes still work.";
+    if (state) el.append(h("p", { class: "hint-text vs-presence" }, state));
+  }
+
+  friendsChanged() {
+    if (this.phase === "lobby" || this.phase === "opening") this.renderFriends();
+    else if (this.phase === "waiting") this.refresh();
+  }
+
+  renderEngines(body) {
+    const mine = this.data.elo.engine;
+    const level = nearestBot(mine);
+    const heads = new Map(D.rivals(this.data.log.filter((x) => x.k === "e")).map((r) => [r.id, r]));
+    body.append(
+      h("p", { class: "hint-text vs-lede" }, "The app's own solver, played at set speeds. Always here, no connection needed. Your engine rating moves the way it would against people: a win over a weaker engine pays little, a win over a stronger one pays a lot."),
+      h("div", { class: "row vs-enginebar" }, h("span", { class: "label" }, "board"), this.sizeSeg()),
+      h(
+        "table",
+        { class: "ledger vs-ladder" },
+        h(
+          "thead",
+          null,
+          h("tr", null, h("th", null, "engine"), h("th", { class: "tnum" }, "rating"), h("th", { class: "tnum" }, `about, ${this.N}x${this.N}`), h("th", { class: "tnum" }, "you"), h("th", { class: "tnum" }, "win / loss"), h("th", null, "")),
+        ),
+        h(
+          "tbody",
+          null,
+          BOTS.map((b) => {
+            const rec = heads.get(b.id);
+            return h(
+              "tr",
+              { class: b === level ? "is-me" : null, "data-bot": b.id },
+              h("td", null, b.name, b === level ? h("span", { class: "tag tag--spot vs-level" }, "your level") : null),
+              h("td", { class: "tnum" }, b.elo),
+              h("td", { class: "tnum" }, about(typicalMs(b, this.N))),
+              h("td", { class: "tnum" }, rec ? `${rec.w} to ${rec.l}` : ""),
+              h("td", { class: "tnum" }, `${signed(D.eloDelta(mine, b.elo, 1))} / ${signed(D.eloDelta(mine, b.elo, 0))}`),
+              h("td", { class: "vs-friend-act" }, h("button", { class: "btn btn--small" + (b === level ? " btn--primary" : ""), type: "button", onclick: () => this.raceBot(b) }, "Race")),
+            );
+          }),
+        ),
+      ),
+    );
+  }
+
+  renderStats(body) {
+    const d = this.data;
+    const rows = d.log.filter((x) => this.statsOf === "all" || (this.statsOf === "friends" ? x.k === "f" : x.k === "e"));
+    const t = D.tally(rows);
+    const fact = (label, value) => h("tr", null, h("td", null, label), h("td", { class: "tnum" }, value));
+    const chartEl = h("div", { class: "vs-chart" });
+    const head = h(
+      "div",
+      { class: "row vs-statsbar" },
+      seg(
+        [
+          { value: "all", label: "All" },
+          { value: "friends", label: "Friends" },
+          { value: "engines", label: "Engines" },
+        ],
+        this.statsOf,
+        (v) => {
+          this.statsOf = v;
+          this.renderTab();
+        },
+        "Which races",
+      ),
+    );
+    body.append(head);
+    if (!d.log.length) {
+      body.append(h("p", { class: "hint-text" }, "No races yet. Every round against a friend or an engine lands here: results, times, both ratings and who you have beaten."));
+      return;
+    }
+    const bySize = D.SIZES.map((N) => ({ N, t: D.tally(rows.filter((x) => x.N === N)) })).filter((x) => x.t.n);
+    const rivals = D.rivals(rows).slice(0, 14);
+    const recent = rows.slice(-14).reverse();
+    const resultWord = { w: "won", l: "lost", d: "draw" };
+    body.append(
+      h(
+        "div",
+        { class: "cols vs-statcols" },
+        h(
+          "div",
+          { class: "stat-block" },
+          h("div", { class: "label" }, "ratings"),
+          h(
+            "table",
+            { class: "ledger ledger--facts" },
+            h(
+              "tbody",
+              null,
+              fact("against friends", `${d.elo.friends} (peak ${d.peak.friends})`),
+              fact("against engines", `${d.elo.engine} (peak ${d.peak.engine})`),
+              fact("matches won", `${d.matches.w} of ${d.matches.w + d.matches.l}`),
+            ),
+          ),
+          chartEl,
+        ),
+        h(
+          "div",
+          { class: "stat-block" },
+          h("div", { class: "label" }, "rounds"),
+          h(
+            "table",
+            { class: "ledger ledger--facts" },
+            h(
+              "tbody",
+              null,
+              fact("raced", t.n),
+              fact("won, lost, drawn", `${t.w}, ${t.l}, ${t.d}`),
+              fact("win rate", t.n ? Math.round(t.rate * 100) + "%" : ""),
+              fact("winning streak now", t.streak),
+              fact("longest winning streak", t.bestStreak),
+              fact("fastest race solve", t.best ? fmtTime(t.best) : ""),
+              fact("turns per second", t.tps ? t.tps.toFixed(1) : ""),
+            ),
+          ),
+        ),
+      ),
+      bySize.length
+        ? h(
+            "div",
+            { class: "vs-section" },
+            h("div", { class: "label" }, "by board"),
+            h(
+              "table",
+              { class: "ledger" },
+              h("thead", null, h("tr", null, h("th", null, "board"), h("th", { class: "tnum" }, "rounds"), h("th", { class: "tnum" }, "won"), h("th", { class: "tnum" }, "best"), h("th", { class: "tnum" }, "median"), h("th", { class: "tnum" }, "tps"))),
               h(
-                "table",
-                { class: "ledger" },
-                h("thead", null, h("tr", null, h("th", null, "against"), h("th", { class: "tnum" }, "won"), h("th", { class: "tnum" }, "lost"), h("th", { class: "tnum" }, "drawn"), h("th", { class: "tnum" }, "best"))),
-                h(
-                  "tbody",
-                  null,
-                  rivals.map(([name, r]) =>
-                    h("tr", null, h("td", null, name), h("td", { class: "tnum" }, r.w || 0), h("td", { class: "tnum" }, r.l || 0), h("td", { class: "tnum" }, r.d || 0), h("td", { class: "tnum" }, r.best ? fmtTime(r.best) : "")),
+                "tbody",
+                null,
+                bySize.map((x) =>
+                  h(
+                    "tr",
+                    null,
+                    h("td", null, `${x.N}x${x.N}`),
+                    h("td", { class: "tnum" }, x.t.n),
+                    h("td", { class: "tnum" }, Math.round(x.t.rate * 100) + "%"),
+                    h("td", { class: "tnum" }, x.t.best ? fmtTime(x.t.best) : ""),
+                    h("td", { class: "tnum" }, x.t.median ? fmtTime(x.t.median) : ""),
+                    h("td", { class: "tnum" }, x.t.tps ? x.t.tps.toFixed(1) : ""),
                   ),
                 ),
               ),
-            )
-          : null,
+            ),
+          )
+        : null,
+      rivals.length
+        ? h(
+            "div",
+            { class: "vs-section" },
+            h("div", { class: "label" }, "head to head"),
+            h(
+              "table",
+              { class: "ledger" },
+              h("thead", null, h("tr", null, h("th", null, "against"), h("th", { class: "tnum" }, "won"), h("th", { class: "tnum" }, "lost"), h("th", { class: "tnum" }, "drawn"), h("th", { class: "tnum" }, "your best"), h("th", { class: "tnum" }, "last"))),
+              h(
+                "tbody",
+                null,
+                rivals.map((r) =>
+                  h(
+                    "tr",
+                    null,
+                    h("td", null, r.name, r.kind === "e" ? h("span", { class: "tag vs-level" }, "engine") : null),
+                    h("td", { class: "tnum" }, r.w),
+                    h("td", { class: "tnum" }, r.l),
+                    h("td", { class: "tnum" }, r.d),
+                    h("td", { class: "tnum" }, r.best ? fmtTime(r.best) : ""),
+                    h("td", { class: "tnum" }, relDate(r.last)),
+                  ),
+                ),
+              ),
+            ),
+          )
+        : null,
+      h(
+        "div",
+        { class: "vs-section" },
+        h("div", { class: "label" }, "latest rounds"),
+        h(
+          "table",
+          { class: "ledger" },
+          h("thead", null, h("tr", null, h("th", null, "against"), h("th", null, "board"), h("th", { class: "tnum" }, "you"), h("th", { class: "tnum" }, "them"), h("th", null, "result"), h("th", { class: "tnum" }, "rating"))),
+          h(
+            "tbody",
+            null,
+            recent.map((x) =>
+              h(
+                "tr",
+                null,
+                h("td", null, x.o),
+                h("td", null, `${x.N}x${x.N}`),
+                h("td", { class: "tnum" + (x.r === "w" ? " is-win" : "") }, x.ms ? fmtTime(x.ms) : "no time"),
+                h("td", { class: "tnum" + (x.r === "l" ? " is-win" : "") }, x.oms ? fmtTime(x.oms) : "no time"),
+                h("td", null, resultWord[x.r] || ""),
+                h("td", { class: "tnum" }, x.e != null ? `${x.e} (${signed(x.d)})` : "not rated"),
+              ),
+            ),
+          ),
+        ),
       ),
+      h(
+        "div",
+        { class: "row vs-section" },
+        h(
+          "button",
+          {
+            class: "btn btn--ghost btn--small",
+            type: "button",
+            onclick: () =>
+              confirmAction("Clear every 1v1 result and set both ratings back to 1000? Friends stay.", "Clear 1v1 stats", () => {
+                D.clearStats();
+                this.presence.announce();
+                this.render();
+              }),
+          },
+          "Clear 1v1 stats",
+        ),
+      ),
+    );
+    // rating after each rated round, one line per kind
+    const series = [];
+    const line = (k, name, color) => {
+      const pts = d.log.filter((x) => x.k === k && x.e != null).map((x, i) => ({ x: i + 1, y: x.e }));
+      if (pts.length > 1) series.push({ name, color, points: [{ x: 0, y: D.START_ELO }, ...pts] });
+    };
+    if (this.statsOf !== "engines") line("f", "friends", "var(--chart-a)");
+    if (this.statsOf !== "friends") line("e", "engines", "var(--chart-b)");
+    if (series.length) {
+      const ys = series.flatMap((s) => s.points.map((pt) => pt.y));
+      lineChart(chartEl, series, { height: 180, yMin: Math.floor((Math.min(...ys) - 20) / 50) * 50, yMax: Math.ceil((Math.max(...ys) + 20) / 50) * 50, xLabel: "rated rounds", xFmt: (v) => (Number.isInteger(v) ? String(v) : ""), title: "Rating after each rated round" });
+      if (series.length > 1) chartEl.append(h("p", { class: "hint-text vs-chartkey" }, h("span", { style: { color: "var(--chart-a)" } }, "friends"), " and ", h("span", { style: { color: "var(--chart-b)" } }, "engines")));
+    }
+  }
+
+  renderOptions(body) {
+    const set = (key) => (on) => {
+      this.prefs[key] = on;
+      D.save();
+      if (key === "online") {
+        if (on) this.presence.start();
+        else this.presence.stop();
+      }
+    };
+    body.append(
+      this.nameField(),
+      h(
+        "div",
+        { class: "vs-options" },
+        toggle("Race sounds", this.prefs.sounds, set("sounds"), "The countdown, a win, a loss, a friend arriving, a challenge. Tile clicks and volume follow Settings."),
+        toggle("Winning animations", this.prefs.fx, set("fx"), "Paper confetti for a round, more of it for a match. Stays off when motion is reduced."),
+        toggle("Show me online to friends", this.prefs.online, set("online"), "While the app is open, people who have your friend code can see you are here and challenge you. Off: room codes and engines still work."),
+      ),
+      h("p", { class: "hint-text vs-lede" }, "Board size, match length, countdown and whether a room is rated are set by whoever makes the room, in the room itself. They are remembered for next time."),
     );
   }
 
@@ -323,12 +741,123 @@ export class VersusView {
     if (this.statusEl && this.phase !== "lobby" && this.phase !== "opening") this.refresh();
   }
 
+  /* ---------- friends ---------- */
+
+  copyFriendLink() {
+    copyText(`Add me on Fifteen Press 1v1: ${this.friendLink()} (friend code ${this.data.fc})`).then((ok) => toast(ok ? "Friend link copied. Send it to a friend." : "Could not copy. Your friend code is " + this.data.fc));
+  }
+
+  addFriendTyped() {
+    const fc = D.cleanFriendCode(this.friendInput ? this.friendInput.value : "");
+    if (!fc) return toast("A friend code is 8 letters and numbers. A friend link works too.");
+    if (this.friendInput) this.friendInput.value = "";
+    this.addFriendCode(fc);
+  }
+
+  addFriendCode(fc, name) {
+    if (fc === this.data.fc) return toast("That is your own friend code.");
+    const had = D.friend(fc);
+    const f = D.addFriend(fc, name);
+    if (!f) return toast(`The friends list is full (${D.MAX_FRIENDS}).`);
+    if (!had) toast(name ? `${name} is on your friends list.` : "Added. Their name shows up once they are online.");
+    this.presence.ask(fc);
+    this.presence.retry().then(() => this.presence.probe(true));
+    this.friendsChanged();
+    if (this.statusEl) this.refresh();
+  }
+
+  removeFriendAsk(f) {
+    confirmAction(`Remove ${f.name || f.fc} from your friends?`, "Remove", () => {
+      D.removeFriend(f.fc);
+      this.friendsChanged();
+    });
+  }
+
+  // somebody who has my code added me
+  addedBy({ fc, name }) {
+    notice({
+      title: `${name} added you as a friend`,
+      text: "Add them back to challenge each other with one press.",
+      actions: [
+        { label: "Add back", primary: true, run: () => this.addFriendCode(fc, name) },
+        { label: "Not now" },
+      ],
+    });
+    this.sfx("knock");
+  }
+
+  challengeFriend(fc) {
+    const f = D.friend(fc);
+    if (!f) return;
+    if (this.phase === "waiting" && this.role === "host") {
+      this.pendingChallenge = fc;
+      return this.sendChallenge();
+    }
+    if (this.phase !== "lobby") return;
+    this.pendingChallenge = fc;
+    this.host();
+  }
+
+  sendChallenge() {
+    const fc = this.pendingChallenge;
+    const f = fc && D.friend(fc);
+    if (!f || this.phase !== "waiting" || this.role !== "host") return;
+    const name = f.name || "your friend";
+    if (this.presence.challenge(fc, this.code, this.room)) this.setNote(`Challenge sent to ${name}. The race starts when you are both ready.`);
+    else this.setNote(`${name} is not online right now. Send them the code or the link instead.`);
+  }
+
+  challengeAnswered({ fc, name, answer }) {
+    if (fc !== this.pendingChallenge || this.phase !== "waiting") return;
+    this.setNote(answer === "busy" ? `${name} is in the middle of a race. Try again in a minute.` : `${name} said not now.`);
+  }
+
+  incomingChallenge({ fc, name, code, room, known }) {
+    if (this.phase === "countdown" || this.phase === "racing" || this.phase === "opening") return this.presence.answer(fc, "busy");
+    const old = this.asks.get(fc);
+    if (old) old();
+    const words = `${room.N}x${room.N}${room.to ? `, first to ${room.to}` : ""}${room.rated ? ", rated" : ""}${known ? "" : ". Not on your friends list."}`;
+    const close = notice({
+      title: `${name} wants to race`,
+      text: words,
+      ms: 45000,
+      actions: [
+        {
+          label: "Accept",
+          primary: true,
+          run: () => {
+            this.asks.delete(fc);
+            this.acceptChallenge(code);
+          },
+        },
+        {
+          label: "Not now",
+          run: () => {
+            this.asks.delete(fc);
+            this.presence.answer(fc, "no");
+          },
+        },
+      ],
+    });
+    this.asks.set(fc, close);
+    this.sfx("ring");
+  }
+
+  acceptChallenge(code) {
+    if (this.phase !== "lobby") this.leave();
+    this.pendingCode = code;
+    this.tab = "friends";
+    if (location.hash !== "#versus/" + code) location.hash = "#versus/" + code;
+    else this.show(code);
+  }
+
   /* ---------- connecting ---------- */
 
   async host() {
     if (this.phase !== "lobby") return;
     this.readName();
     this.role = "host";
+    this.bot = null;
     this.phase = "opening";
     this.note = "";
     this.render();
@@ -349,6 +878,7 @@ export class VersusView {
       this.phase = "waiting";
       this.note = "";
       this.render();
+      if (this.pendingChallenge) this.sendChallenge();
     });
     peer.on("connection", (conn) => {
       if (this.peer !== peer) return;
@@ -371,6 +901,7 @@ export class VersusView {
         // somebody new sat down: a fresh score sheet
         this.score = { me: 0, opp: 0 };
         this.rounds = [];
+        this.matchOver = null;
       }
       this.oppCid = cid || "";
       this.adopt(conn);
@@ -403,6 +934,7 @@ export class VersusView {
     }
     this.readName();
     this.role = "guest";
+    this.bot = null;
     this.code = code;
     this.pendingCode = code;
     this.phase = "opening";
@@ -440,6 +972,19 @@ export class VersusView {
     }, 15000);
   }
 
+  hello() {
+    this.send({
+      t: "hello",
+      v: PROTOCOL,
+      name: this.myName,
+      fc: this.data.fc,
+      elo: this.data.elo.friends,
+      N: this.N,
+      room: this.role === "host" ? this.room : null,
+      score: this.role === "host" ? { host: this.score.me, guest: this.score.opp } : null,
+    });
+  }
+
   adopt(conn) {
     this.conn = conn;
     conn.on("open", () => {
@@ -448,7 +993,7 @@ export class VersusView {
       this.redials = 0;
       this.lastSeen = performance.now();
       this.startBeat();
-      this.send({ t: "hello", v: PROTOCOL, name: this.myName, N: this.N, score: this.role === "host" ? { host: this.score.me, guest: this.score.opp } : null });
+      this.hello();
       if (this.role === "host") this.send({ t: "ping", ts: performance.now() });
     });
     conn.on("data", (msg) => {
@@ -484,7 +1029,7 @@ export class VersusView {
     let last = 0;
     this.beat = setInterval(() => {
       const conn = this.conn;
-      if (!conn || !conn.open) return;
+      if (!conn || !conn.open || conn.bot) return;
       this.resend();
       // by the clock, not by counting ticks: a hidden tab only ticks once a second
       if (performance.now() - last < BEAT) return;
@@ -529,13 +1074,9 @@ export class VersusView {
   fail(text) {
     this.teardown();
     this.phase = "lobby";
-    this.role = null;
-    this.oppName = "";
-    this.oppCid = "";
-    this.score = { me: 0, opp: 0 };
-    this.rounds = [];
-    this.readyMe = this.readyOpp = false;
+    this.resetSeat();
     this.note = text;
+    this.tab = "friends";
     this.render();
   }
 
@@ -579,7 +1120,7 @@ export class VersusView {
     this.clearTimers();
     clearInterval(this.beat);
     this.redialing = false;
-    if (this.conn && this.conn.open) {
+    if (this.conn && this.conn.open && !this.conn.bot) {
       try {
         this.conn.send({ t: "bye" });
       } catch (e) {
@@ -599,21 +1140,85 @@ export class VersusView {
   }
 
   leave() {
+    const wasBot = !!this.bot;
     this.leftOnPurpose = true;
     this.teardown();
     this.leftOnPurpose = false;
     this.phase = "lobby";
-    this.role = null;
     this.code = "";
     this.pendingCode = "";
-    this.oppName = "";
-    this.oppCid = "";
-    this.score = { me: 0, opp: 0 };
-    this.rounds = [];
-    this.readyMe = this.readyOpp = false;
+    this.resetSeat();
     this.note = "";
+    this.tab = wasBot ? "engines" : "friends";
     if (location.hash.startsWith("#versus/")) history.replaceState(null, "", "#versus");
     this.render();
+  }
+
+  /* ---------- engines ---------- */
+
+  raceBot(bot) {
+    if (this.phase !== "lobby") return;
+    if (this.nameInput) this.readName();
+    else this.myName = this.myName || this.defaultName();
+    this.resetSeat();
+    this.role = "host";
+    this.bot = bot;
+    this.code = "";
+    this.oppName = bot.name;
+    this.oppElo = bot.elo;
+    // the engine sits on the other end of a line that never leaves this page
+    this.conn = { open: true, bot: true, send: (msg) => this.botHears(msg), close() {} };
+    this.round = null;
+    this.game = null;
+    this.phase = "idle";
+    this.note = "";
+    this.render();
+  }
+
+  botHears(msg) {
+    if (msg.t === "ready")
+      this.later(() => {
+        if (this.bot && this.phase === "idle") this.onData({ t: "ready" });
+      }, 220);
+  }
+
+  swapBot(step) {
+    if (!this.bot || this.phase !== "idle") return;
+    const next = BOTS[BOTS.indexOf(this.bot) + step];
+    if (!next) return;
+    this.bot = next;
+    this.oppName = next.name;
+    this.oppElo = next.elo;
+    this.score = { me: 0, opp: 0 };
+    this.rounds = [];
+    this.round = null;
+    this.game = null;
+    this.matchOver = null;
+    this.readyMe = this.readyOpp = false;
+    this.hideVerdict();
+    this.showIdleBoards();
+    this.refresh();
+  }
+
+  async runBot(r) {
+    let plan = null;
+    try {
+      plan = await r.plan;
+    } catch (e) {
+      console.error("1v1 engine", e);
+    }
+    if (!plan || this.round !== r || !this.bot) return;
+    const run = new BotRun(plan, E.scrambleFromSeed(r.seed, r.N), r.N);
+    const tick = () => {
+      if (this.round !== r || !this.bot) return;
+      const elapsed = performance.now() - r.goAt;
+      const step = run.step(elapsed);
+      if (step.done) return this.onData({ t: "done", n: r.n, ms: plan.ms, m: plan.moves.length });
+      if (step.moved) this.onData({ t: "p", n: r.n, b: run.board, m: step.moves });
+      if (r.me.status === "done" && !r.opp.passed && elapsed > r.me.ms) this.onData({ t: "passed", n: r.n });
+      this.later(tick, 33);
+    };
+    tick();
   }
 
   /* ---------- messages ---------- */
@@ -623,18 +1228,31 @@ export class VersusView {
       case "hello": {
         this.oppName = cleanName(msg.name) || "Friend";
         if (this.oppName === this.myName) this.oppName += " (2)";
+        this.oppV = msg.v | 0 || 1;
+        this.oppFc = D.isFriendCode(msg.fc) && msg.fc !== this.data.fc ? msg.fc : "";
+        this.oppElo = this.oppV >= 2 && msg.elo != null ? D.cleanElo(msg.elo) : null;
         if (this.role === "guest") {
-          if ([3, 4, 5].includes(msg.N)) this.N = msg.N;
+          this.room = this.oppV >= 2 ? D.cleanRoom(msg.room, this.room) : Object.assign(D.cleanRoom({ N: msg.N }, this.room), LEGACY_ROOM);
           if (msg.score) this.score = { me: msg.score.guest | 0, opp: msg.score.host | 0 };
+        }
+        if (this.oppFc) {
+          const f = D.friend(this.oppFc);
+          if (f && (f.name !== this.oppName || f.elo !== this.oppElo)) {
+            f.name = this.oppName;
+            if (this.oppElo != null) f.elo = this.oppElo;
+            D.save();
+          }
         }
         this.abortRound();
         this.round = null;
         this.game = null;
+        this.matchOver = null;
         this.readyMe = this.readyOpp = false;
         this.phase = "idle";
         this.note = "";
         this.render();
-        audio.thunk();
+        if (this.prefs.sounds) audio.knock();
+        else audio.thunk();
         break;
       }
       case "hb":
@@ -646,11 +1264,12 @@ export class VersusView {
         if (typeof msg.ts === "number") this.rtt = Math.max(0, Math.min(1500, performance.now() - msg.ts));
         break;
       case "cfg":
-        if (this.role === "guest" && [3, 4, 5].includes(msg.N) && this.phase === "idle") {
-          this.N = msg.N;
+        if (this.role === "guest" && this.phase === "idle") {
+          this.room = D.cleanRoom(msg.room || { N: msg.N }, this.room);
           this.readyMe = this.readyOpp = false;
           this.round = null;
           this.game = null;
+          this.hideVerdict();
           this.showIdleBoards();
           this.refresh();
         }
@@ -661,7 +1280,11 @@ export class VersusView {
         this.maybeStart();
         break;
       case "start":
-        if (this.role === "guest" && typeof msg.seed === "string" && /^[A-Za-z0-9]{1,32}$/.test(msg.seed) && [3, 4, 5].includes(msg.N)) this.beginCountdown(msg.seed, msg.N, msg.n | 0, LEAD);
+        if (this.role === "guest" && typeof msg.seed === "string" && /^[A-Za-z0-9]{1,32}$/.test(msg.seed) && D.SIZES.includes(msg.N)) {
+          this.room.lead = D.LEADS.includes(msg.lead) ? msg.lead : 3;
+          this.room.peek = msg.peek === true;
+          this.beginCountdown(msg.seed, msg.N, msg.n | 0, this.room.lead * 1000, msg.fresh === true);
+        }
         break;
       case "p": {
         const r = this.round;
@@ -677,6 +1300,10 @@ export class VersusView {
         r.opp.status = "done";
         r.opp.ms = Number(msg.ms);
         r.opp.moves = msg.m | 0;
+        if (r.row) {
+          r.row.oms = Math.round(r.opp.ms);
+          D.save();
+        }
         if (this.oppView) this.oppView.set(E.solvedBoard(r.N), r.N);
         this.checkPassed();
         this.decide();
@@ -712,9 +1339,15 @@ export class VersusView {
           this.rounds = [];
           this.round = null;
           this.game = null;
+          this.matchOver = null;
+          this.hideVerdict();
           this.showIdleBoards();
           this.refresh();
         }
+        break;
+      case "friend":
+        // the other player in the room put me on their list
+        if (this.oppFc && !D.friend(this.oppFc)) this.addedBy({ fc: this.oppFc, name: this.oppName });
         break;
       case "full":
         this.fail("That room already has two players.");
@@ -750,10 +1383,11 @@ export class VersusView {
     });
     this.view.setColoring(this.s.coloring);
     this.countEl = h("div", { class: "vs-count", "aria-live": "assertive", hidden: true });
-    this.boardWrap.appendChild(this.countEl);
+    this.verdictEl = h("div", { class: "vs-verdict", hidden: true });
+    this.boardWrap.append(this.countEl, this.verdictEl);
 
     this.oppWrap = h("div", { class: "vs-opp-board" });
-    this.oppView = new BoardView(this.oppWrap, { small: true, label: "Your friend's board" });
+    this.oppView = new BoardView(this.oppWrap, { small: true, label: "The other board" });
     this.oppView.setColoring(this.s.coloring);
 
     this.scoreEl = h("div", { class: "vs-score" });
@@ -763,7 +1397,8 @@ export class VersusView {
     this.giveBtn = h("button", { class: "btn btn--ghost", type: "button", hidden: true, onclick: () => this.giveUp() }, "Give up");
     this.oppNameEl = h("div", { class: "label" });
     this.oppStateEl = h("div", { class: "vs-opp-state tnum" });
-    this.sizeRow = h("div", { class: "row vs-size" });
+    this.oppToolsEl = h("div", { class: "row vs-opp-tools" });
+    this.optionsEl = h("div", { class: "vs-roomopts" });
     this.historyEl = h("div", { class: "vs-history" });
     this.roomEl = h("div", { class: "vs-roomline" });
 
@@ -789,18 +1424,14 @@ export class VersusView {
             this.statusEl,
             h("div", { class: "row vs-actions" }, this.readyBtn, this.giveBtn),
           ),
-          h(
-            "aside",
-            { class: "vs-side" },
-            h("div", { class: "vs-opp" }, this.oppNameEl, this.oppWrap, this.oppStateEl),
-            this.sizeRow,
-            this.historyEl,
-          ),
+          h("aside", { class: "vs-side" }, h("div", { class: "vs-opp" }, this.oppNameEl, this.oppWrap, this.oppStateEl, this.oppToolsEl), this.optionsEl, this.historyEl),
         ),
       )),
     );
     this.showIdleBoards();
     this.refresh();
+    const r = this.round;
+    if (r && r.winner && this.phase === "idle") this.showVerdict(r, true);
   }
 
   showIdleBoards() {
@@ -818,23 +1449,36 @@ export class VersusView {
     this.oppView.setHidden(false);
   }
 
+  myElo() {
+    return this.bot ? this.data.elo.engine : this.data.elo.friends;
+  }
+  // does a round in this room move the ratings
+  ratedNow() {
+    if (this.bot) return true;
+    return this.room.rated && this.oppElo != null && this.oppV >= 2;
+  }
+
   refresh() {
     if (!this.statusEl || this.phase === "lobby" || this.phase === "opening") return;
     const opp = this.oppName || "Friend";
     const r = this.round;
     const linked = !!(this.conn && this.conn.open);
+    const rated = this.ratedNow();
+    const to = this.rules.to;
 
     // score line
+    this.myEloEl = h("small", { class: "vs-elo tnum" }, rated || this.bot ? this.myElo() : "");
     clear(this.scoreEl).append(
-      h("span", { class: "vs-who" }, this.myName),
+      h("span", { class: "vs-who" }, this.myName, this.myEloEl),
       h("span", { class: "vs-points tnum" }, h("b", { class: this.score.me > this.score.opp ? "is-up" : null }, this.score.me), h("i", null, ":"), h("b", { class: this.score.opp > this.score.me ? "is-up" : null }, this.score.opp)),
-      h("span", { class: "vs-who" }, linked || this.oppName ? opp : "waiting"),
+      h("span", { class: "vs-who" }, linked || this.oppName ? opp : "waiting", this.oppElo != null && (linked || this.oppName) ? h("small", { class: "vs-elo tnum" }, this.oppElo) : null),
+      to ? h("span", { class: "label vs-target" }, `first to ${to}`) : null,
     );
 
     // room line
     clear(this.roomEl).append(
-      h("span", { class: "label" }, "room"),
-      h("button", { class: "vs-codechip", type: "button", title: "copy the invite link", onclick: () => this.copyInvite() }, this.code),
+      this.bot ? h("span", { class: "label" }, "engine race") : h("span", { class: "label" }, "room"),
+      this.bot ? null : h("button", { class: "vs-codechip", type: "button", title: "copy the invite link", onclick: () => this.copyInvite() }, this.code),
       this.role === "host" && this.rounds.length ? h("button", { class: "btn btn--ghost btn--small", type: "button", disabled: this.phase !== "idle", onclick: () => this.resetScore() }, "Reset score") : null,
       h("button", { class: "btn btn--ghost btn--small", type: "button", onclick: () => this.leave() }, "Leave"),
     );
@@ -845,7 +1489,7 @@ export class VersusView {
     if (this.phase === "waiting") {
       text = this.note || (this.role === "host" ? "Send your friend the code or the link. The race starts when you are both ready." : "Connecting to the room…");
     } else if (this.phase === "countdown") {
-      text = "Same scramble for both of you. Get ready.";
+      text = this.rules.peek ? "Same scramble for both of you. Read it now, the clock starts at zero." : "Same scramble for both of you. Get ready.";
     } else if (this.phase === "racing" && r) {
       if (r.me.status === "solving") {
         if (r.winner === "opp") {
@@ -873,11 +1517,15 @@ export class VersusView {
           else if (them.status === "done") text = `${opp} wins the round with ${theirs}.`;
           else text = `${opp} wins the round. You gave up first.`;
         } else text = me.status === "done" ? `Dead even at ${mine}. No point.` : "Nobody finished. No point.";
+        if (r.delta != null && r.eloTo != null) text += ` Rating ${signed(r.delta)}, now ${r.eloTo}.`;
+        if (this.matchOver) text += this.matchOver === "me" ? ` That is the match, ${this.score.me} to ${this.score.opp}.` : ` ${opp} takes the match, ${this.score.opp} to ${this.score.me}.`;
         if (this.readyMe && !this.readyOpp) text += ` Waiting on ${opp}.`;
-        else if (!this.readyMe && this.readyOpp) text += ` ${opp} is ready.`;
+        else if (!this.readyMe && this.readyOpp && !this.bot) text += ` ${opp} is ready.`;
       } else if (this.readyMe && !this.readyOpp) text = `You are ready. Waiting on ${opp}.`;
       else if (!this.readyMe && this.readyOpp) text = `${opp} is ready. Press Space when you are.`;
+      else if (this.bot) text = `${opp}, rated ${this.bot.elo}, about ${about(typicalMs(this.bot, this.N))} on this board. Press Space when you are ready.`;
       else text = `${opp} is in. Press Space when you are ready.`;
+      if (!this.bot && this.oppV < 2 && !(r && r.winner)) text += " They are on an older version, so room options and ratings are off until they update.";
     }
     this.statusEl.textContent = text;
     this.statusEl.dataset.tone = tone;
@@ -887,41 +1535,89 @@ export class VersusView {
     const inviting = this.phase === "waiting" && this.role === "host";
     this.inviteEl.hidden = !inviting;
     clear(this.inviteEl);
-    if (inviting)
+    if (inviting) {
+      const around = this.data.friends.filter((f) => this.presence.online(f.fc));
       this.inviteEl.append(
         h("div", { class: "label" }, "room code"),
         h("div", { class: "vs-bigcode" }, this.code),
         h("div", { class: "label" }, "or the link, which opens in any browser"),
         h("div", { class: "vs-link" }, this.inviteLink()),
+        around.length
+          ? h(
+              "div",
+              { class: "row vs-around" },
+              h("span", { class: "label" }, "online now"),
+              around.map((f) => h("button", { class: "btn btn--small", type: "button", onclick: () => this.challengeFriend(f.fc) }, `Challenge ${f.name || f.fc}`)),
+            )
+          : null,
       );
+    }
 
     // buttons
     const canReady = this.phase === "idle" && linked && !this.readyMe;
     this.readyBtn.disabled = !canReady;
     this.readyBtn.hidden = this.phase === "racing" || this.phase === "countdown";
-    clear(this.readyBtn).append(this.phase === "waiting" && this.role === "host" ? "Copy invite link" : this.readyMe ? "Ready" : r ? "Next round" : "Ready", canReady ? h("kbd", null, "Space") : null);
+    const readyWord = this.readyMe ? "Ready" : this.matchOver ? "New match" : r ? "Next round" : "Ready";
+    clear(this.readyBtn).append(this.phase === "waiting" && this.role === "host" ? "Copy invite link" : readyWord, canReady ? h("kbd", null, "Space") : null);
     if (this.phase === "waiting" && this.role === "host") {
       this.readyBtn.disabled = false;
       this.readyBtn.hidden = false;
     }
     this.giveBtn.hidden = !(this.phase === "racing" && r && r.me.status === "solving");
 
-    // host picks the size between rounds
-    clear(this.sizeRow);
-    if (this.role === "host" && (this.phase === "idle" || this.phase === "waiting"))
-      this.sizeRow.append(
-        h("span", { class: "label" }, "board"),
-        seg(
-          [3, 4, 5].map((n) => ({ value: n, label: `${n}x${n}` })),
-          this.N,
-          (n) => this.setSize(n),
-          "Board size",
-        ),
-      );
-    else this.sizeRow.append(h("span", { class: "label" }, `board ${this.N}x${this.N}`));
-
+    this.renderRoomOptions();
     this.refreshOpp();
     this.renderHistory();
+  }
+
+  // whoever made the room sets it up between rounds; the guest reads the same line
+  renderRoomOptions() {
+    const el = clear(this.optionsEl);
+    const mine = this.role === "host" && (this.phase === "idle" || this.phase === "waiting");
+    const legacy = !this.bot && this.oppV < 2 && !!this.oppName;
+    if (!mine) {
+      el.append(h("span", { class: "label" }, "room"), h("p", { class: "hint-text vs-roomwords" }, roomWords(Object.assign({}, this.room, { rated: this.ratedNow() }))));
+      return;
+    }
+    const pick = (key) => (value) => this.setRoom(key, value);
+    el.append(
+      h("div", { class: "vs-opt" }, h("span", { class: "label" }, "board"), seg(D.SIZES.map((n) => ({ value: n, label: `${n}x${n}` })), this.room.N, pick("N"), "Board size")),
+    );
+    if (legacy) return;
+    el.append(
+      h(
+        "div",
+        { class: "vs-opt" },
+        h("span", { class: "label" }, "first to"),
+        seg(D.TARGETS.map((n) => ({ value: n, label: n ? String(n) : "off", title: n ? `a match is first to ${n} rounds` : "single rounds, no match" })), this.room.to, pick("to"), "Match length"),
+      ),
+      h("div", { class: "vs-opt" }, h("span", { class: "label" }, "countdown"), seg(D.LEADS.map((n) => ({ value: n, label: `${n} s` })), this.room.lead, pick("lead"), "Countdown")),
+      toggle("Show the board during the countdown", this.room.peek, pick("peek"), "Time to read the scramble before the clock starts."),
+      this.bot ? null : toggle("Rated", this.room.rated, pick("rated"), "Rounds move both players' rating against friends."),
+    );
+  }
+
+  setRoom(key, value) {
+    if (this.role !== "host" || (this.phase !== "idle" && this.phase !== "waiting")) return;
+    if (this.room[key] === value) return;
+    this.room[key] = value;
+    this.saveRoom();
+    this.readyMe = this.readyOpp = false;
+    if (key === "N" || key === "to") {
+      this.round = null;
+      this.game = null;
+      this.hideVerdict();
+    }
+    this.send({ t: "cfg", N: this.room.N, room: this.room });
+    if (key === "to" && (this.score.me || this.score.opp || this.matchOver)) {
+      // a new match length starts a new match
+      this.score = { me: 0, opp: 0 };
+      this.rounds = [];
+      this.matchOver = null;
+      this.send({ t: "score", score: { host: 0, guest: 0 } });
+    }
+    this.showIdleBoards();
+    this.refresh();
   }
 
   refreshOpp() {
@@ -931,7 +1627,7 @@ export class VersusView {
     this.oppNameEl.textContent = this.oppName || "your friend";
     let text = "";
     if (!linked) text = this.oppName ? "not connected" : "not here yet";
-    else if (!r || this.phase === "countdown") text = this.readyOpp ? "ready" : this.phase === "countdown" ? "" : "not ready";
+    else if (!r || this.phase === "countdown") text = this.readyOpp ? "ready" : this.phase === "countdown" || this.bot ? "" : "not ready";
     else if (r.opp.status === "done") text = `${fmtTime(r.opp.ms)} · ${r.opp.moves} moves`;
     else if (r.opp.status === "dnf") text = "gave up";
     else if (this.phase === "idle") text = this.readyOpp ? "ready" : `still solving · ${r.opp.moves} moves`;
@@ -940,10 +1636,25 @@ export class VersusView {
   }
 
   renderHistory() {
+    // the tools under the other board: add a friend, or step to the next engine
+    const tools = clear(this.oppToolsEl);
+    if (this.bot) {
+      const i = BOTS.indexOf(this.bot);
+      const idle = this.phase === "idle";
+      tools.append(
+        h("button", { class: "btn btn--ghost btn--small", type: "button", disabled: !idle || i <= 0, onclick: () => this.swapBot(-1) }, "Easier"),
+        h("button", { class: "btn btn--ghost btn--small", type: "button", disabled: !idle || i >= BOTS.length - 1, onclick: () => this.swapBot(1) }, "Harder"),
+      );
+    } else if (this.oppFc && this.conn && this.conn.open) {
+      if (D.friend(this.oppFc)) tools.append(h("span", { class: "hint-text" }, "on your friends list"));
+      else tools.append(h("button", { class: "btn btn--small", type: "button", onclick: () => this.addOpponent() }, "Add friend"));
+    }
+
     clear(this.historyEl);
-    const rec = this.oppName ? loadRecord()[this.oppName] : null;
-    if (rec && (rec.w || rec.l || rec.d))
-      this.historyEl.append(h("p", { class: "hint-text" }, `All time against ${this.oppName}: ${rec.w || 0} won, ${rec.l || 0} lost${rec.d ? `, ${rec.d} drawn` : ""}.`));
+    const id = this.bot ? this.bot.id : this.oppFc;
+    const kind = this.bot ? "e" : "f";
+    const all = this.oppName ? D.tally(this.data.log.filter((x) => x.k === kind && (id ? x.id === id : x.o === this.oppName))) : null;
+    if (all && all.n) this.historyEl.append(h("p", { class: "hint-text" }, `All time against ${this.oppName}: ${all.w} won, ${all.l} lost${all.d ? `, ${all.d} drawn` : ""}.`));
     const done = this.rounds.filter((x) => x.winner);
     if (!done.length) return;
     const cell = (p) => (p.status === "done" ? fmtTime(p.ms) : p.status === "dnf" ? "gave up" : "…");
@@ -951,7 +1662,7 @@ export class VersusView {
       h(
         "table",
         { class: "ledger vs-ledger" },
-        h("thead", null, h("tr", null, h("th", null, "round"), h("th", { class: "tnum" }, "you"), h("th", { class: "tnum" }, this.oppName || "friend"))),
+        h("thead", null, h("tr", null, h("th", null, "round"), h("th", { class: "tnum" }, "you"), h("th", { class: "tnum" }, this.oppName || "friend"), h("th", { class: "tnum" }, "rating"))),
         h(
           "tbody",
           null,
@@ -966,6 +1677,7 @@ export class VersusView {
                 h("td", null, `${x.n} · ${x.N}x${x.N}`),
                 h("td", { class: "tnum" + (x.winner === "me" ? " is-win" : "") }, cell(x.me)),
                 h("td", { class: "tnum" + (x.winner === "opp" ? " is-win" : "") }, cell(x.opp)),
+                h("td", { class: "tnum" }, x.delta != null && x.eloTo != null ? signed(x.delta) : ""),
               ),
             ),
         ),
@@ -973,20 +1685,22 @@ export class VersusView {
     );
   }
 
+  addOpponent() {
+    if (!this.oppFc) return;
+    this.addFriendCode(this.oppFc, this.oppName);
+    this.send({ t: "friend" });
+    const f = D.friend(this.oppFc);
+    if (f) {
+      f.told = true;
+      if (this.oppElo != null) f.elo = this.oppElo;
+      D.save();
+    }
+    this.refresh();
+  }
+
   copyInvite() {
     const link = this.inviteLink();
     copyText(`Race me on Fifteen Press: ${link} (room code ${this.code})`).then((ok) => toast(ok ? "Invite copied. Paste it to your friend." : "Could not copy. The code is " + this.code));
-  }
-
-  setSize(n) {
-    if (this.role !== "host" || (this.phase !== "idle" && this.phase !== "waiting")) return;
-    this.N = n;
-    this.readyMe = this.readyOpp = false;
-    this.round = null;
-    this.game = null;
-    this.send({ t: "cfg", N: n });
-    this.showIdleBoards();
-    this.refresh();
   }
 
   resetScore() {
@@ -995,7 +1709,9 @@ export class VersusView {
     this.rounds = [];
     this.round = null;
     this.game = null;
+    this.matchOver = null;
     this.send({ t: "score", score: { host: 0, guest: 0 } });
+    this.hideVerdict();
     this.showIdleBoards();
     this.refresh();
   }
@@ -1014,17 +1730,26 @@ export class VersusView {
   maybeStart() {
     if (this.role !== "host" || this.phase !== "idle" || !this.readyMe || !this.readyOpp) return;
     const seed = E.randomSeed(8);
-    const n = (this.rounds.length ? this.rounds[this.rounds.length - 1].n : 0) + 1;
-    this.send({ t: "start", n, seed, N: this.N });
+    const fresh = !!this.matchOver;
+    const n = fresh ? 1 : (this.rounds.length ? this.rounds[this.rounds.length - 1].n : 0) + 1;
+    const rules = this.rules;
+    const lead = rules.lead * 1000;
+    this.send({ t: "start", n, seed, N: this.N, lead: rules.lead, peek: rules.peek, fresh });
     // the friend hears about it half a round trip later, so wait that long to count down together
-    this.beginCountdown(seed, this.N, n, LEAD + this.rtt / 2);
+    this.beginCountdown(seed, this.N, n, lead + (this.bot ? 0 : this.rtt / 2), fresh);
     this.send({ t: "ping", ts: performance.now() });
   }
 
-  beginCountdown(seed, N, n, lead) {
+  beginCountdown(seed, N, n, lead, fresh) {
     this.clearTimers();
     this.N = N;
     this.readyMe = this.readyOpp = false;
+    if (fresh) {
+      // the last match is over: a clean sheet for the next one
+      this.score = { me: 0, opp: 0 };
+      this.rounds = [];
+      this.matchOver = null;
+    }
     this.phase = "countdown";
     const board = E.scrambleFromSeed(seed, N);
     const r = {
@@ -1037,28 +1762,36 @@ export class VersusView {
     };
     this.round = r;
     this.rounds.push(r);
+    if (this.bot) r.plan = planRace(this.bot, board, N, lead).catch(() => null);
     const game = new Game({ N, board, seed, mode: "seed", label: "1v1" });
     this.game = game;
     game.on((type, data) => this.onGame(game, type, data));
     if (!this.view) this.renderRoom();
+    this.hideVerdict();
+    const covered = !this.rules.peek;
     this.view.clearProofed();
     this.view.fast = !!this.s.speedMode;
     this.view.set(board, N, { instant: true });
-    this.view.setHidden(true);
+    this.view.setHidden(covered);
     this.oppView.clearProofed();
     this.oppView.set(board, N, { instant: true });
-    this.oppView.setHidden(true);
+    this.oppView.setHidden(covered);
     this.timeEl.textContent = fmtTime(0);
     this.movesEl.textContent = "0";
     this.goAt = performance.now() + lead;
     this.countEl.hidden = false;
+    this.countEl.classList.toggle("is-peek", !covered);
+    this.countEl.textContent = "";
     this.refresh();
     const tick = () => {
       if (this.round !== r || this.phase !== "countdown") return;
       const left = this.goAt - performance.now();
       if (left <= 0) return this.go(r);
       const shown = String(Math.ceil(left / 1000));
-      if (this.countEl.textContent !== shown) this.countEl.textContent = shown;
+      if (this.countEl.textContent !== shown) {
+        this.countEl.textContent = shown;
+        this.sfx("count", shown === "1");
+      }
       this.later(tick, Math.min(50, left));
     };
     tick();
@@ -1067,13 +1800,15 @@ export class VersusView {
   go(r) {
     this.phase = "racing";
     this.goAt = performance.now();
+    r.goAt = this.goAt;
     this.countEl.hidden = true;
     this.countEl.textContent = "";
     this.view.setHidden(false);
     this.oppView.setHidden(false);
-    this.view.enter();
+    if (!this.rules.peek) this.view.enter();
     this.view.setRunning(true);
-    audio.thunk();
+    if (this.prefs.sounds) audio.go();
+    else audio.thunk();
     this.refresh();
     const frame = () => {
       if (this.round !== r || this.phase !== "racing" || r.me.status !== "solving") return;
@@ -1089,6 +1824,7 @@ export class VersusView {
       this.later(slow, 500);
     };
     this.later(slow, 500);
+    if (this.bot) this.runBot(r);
   }
 
   racing() {
@@ -1115,7 +1851,12 @@ export class VersusView {
       audio.chime();
       this.flushProgress();
       this.send({ t: "done", n: r.n, ms: r.me.ms, m: r.me.moves });
-      this.noteBest(r);
+      if (r.row) {
+        // the round was already called while I was still solving: fill in my own time
+        r.row.ms = r.me.ms;
+        r.row.m = r.me.moves;
+        D.save();
+      }
       this.decide();
       this.settle();
     }
@@ -1178,28 +1919,52 @@ export class VersusView {
     if (!r || r.winner) return;
     r.winner = winner;
     if (score) this.score = score;
-    if (this.oppName) {
-      const rec = loadRecord();
-      const row = rec[this.oppName] || (rec[this.oppName] = { w: 0, l: 0, d: 0 });
-      if (winner === "me") row.w = (row.w || 0) + 1;
-      else if (winner === "opp") row.l = (row.l || 0) + 1;
-      else row.d = (row.d || 0) + 1;
-      row.last = Date.now();
-      saveRecord(rec);
+    const nobody = winner === "draw" && r.me.status !== "done";
+    if (this.oppName && !nobody) {
+      // each side works out its own rating change from the same two numbers, so the two always mirror each other
+      const kind = this.bot ? "engine" : "friends";
+      const rated = this.ratedNow();
+      const before = this.data.elo[kind];
+      const out = D.recordRace({
+        kind,
+        opp: this.oppName,
+        id: this.bot ? this.bot.id : this.oppFc,
+        N: r.N,
+        result: winner === "me" ? "w" : winner === "opp" ? "l" : "d",
+        ms: r.me.status === "done" ? r.me.ms : 0,
+        oppMs: r.opp.status === "done" ? r.opp.ms : 0,
+        moves: r.me.moves,
+        oppElo: this.oppElo,
+        rated,
+      });
+      r.row = this.data.log[this.data.log.length - 1];
+      if (rated) {
+        r.delta = out.delta;
+        r.eloFrom = before;
+        r.eloTo = out.rating;
+        if (!this.bot) {
+          this.oppElo = D.cleanElo(this.oppElo - out.delta);
+          const f = this.oppFc && D.friend(this.oppFc);
+          if (f) {
+            f.elo = this.oppElo;
+            D.save();
+          }
+          this.presence.announce();
+        }
+      }
     }
-    if (winner === "opp" && r.me.status === "solving") audio.fail();
+    const to = this.rules.to;
+    if (to && !this.matchOver && (this.score.me >= to || this.score.opp >= to)) {
+      this.matchOver = this.score.me >= to ? "me" : "opp";
+      D.recordMatch(this.matchOver === "me");
+    }
+    if (winner === "opp" && r.me.status === "solving") {
+      // beaten to it while still solving: hear it now, see it when my own board is done
+      r.toldLoss = true;
+      if (this.prefs.sounds) audio.lose();
+      else audio.fail();
+    }
     this.settle();
-  }
-
-  noteBest(r) {
-    if (!this.oppName || r.N !== 4) return;
-    const rec = loadRecord();
-    const row = rec[this.oppName] || (rec[this.oppName] = { w: 0, l: 0, d: 0 });
-    if (!row.best || r.me.ms < row.best) {
-      row.best = r.me.ms;
-      row.last = Date.now();
-      saveRecord(rec);
-    }
   }
 
   // back to the waiting room once the round is called and my own board is finished
@@ -1208,8 +1973,41 @@ export class VersusView {
     if (r && r.winner && r.me.status !== "solving" && this.phase === "racing") {
       this.phase = "idle";
       cancelAnimationFrame(this.raf);
+      this.refresh();
+      this.celebrate(r);
+      return;
     }
     this.refresh();
+  }
+
+  // the moment a round is over for me: the word across the board, the sound, the paper
+  celebrate(r) {
+    this.showVerdict(r, false);
+    const match = this.matchOver;
+    if (r.winner === "me") {
+      if (this.prefs.fx) confetti(match === "me" ? this.roomRoot : this.boardWrap, { big: match === "me" });
+      this.later(() => this.sfx(match === "me" ? "fanfare" : "win"), 160);
+    } else if (r.winner === "opp" && !r.toldLoss) this.later(() => this.sfx("lose"), 160);
+  }
+
+  showVerdict(r, quiet) {
+    const el = this.verdictEl;
+    if (!el) return;
+    const match = this.matchOver;
+    const word = match ? (match === "me" ? "match won" : "match lost") : r.winner === "me" ? "round won" : r.winner === "opp" ? "round lost" : "no point";
+    const sub = match ? `${this.score.me} to ${this.score.opp}` : r.me.status === "done" ? fmtTime(r.me.ms) : "";
+    clear(el).append(h("div", { class: "vs-verdict-word" }, word), sub ? h("div", { class: "vs-verdict-sub tnum" }, sub) : null);
+    if (r.delta != null && r.eloTo != null) {
+      const num = h("b", { class: "tnum" }, quiet ? r.eloTo : r.eloFrom);
+      el.append(h("div", { class: "vs-verdict-elo tnum" }, "rating ", num, h("span", { "data-up": r.delta > 0 ? "1" : null }, ` ${signed(r.delta)}`)));
+      if (!quiet) countTo(num, r.eloFrom, r.eloTo, 800);
+    }
+    el.dataset.tone = r.winner === "me" ? "good" : r.winner === "opp" ? "bad" : "";
+    el.hidden = false;
+    el.classList.toggle("is-quiet", !!quiet);
+  }
+  hideVerdict() {
+    if (this.verdictEl) this.verdictEl.hidden = true;
   }
 
   abortRound() {
