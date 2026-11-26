@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0b1122" />
+    <meta
+      name="description"
+      content="The 15 puzzle with an optimal solver, a seed lab, stats, leaderboards and move-by-move solve analysis."
+    />
+    <title>Fifteen Press</title>
+    <link rel="icon" href="icon.png" type="image/png" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script src="js/cloud-config.js"></script>
+    <script src="js/data.js"></script>
+    <script src="engine/core.js"></script>
+    <script type="module" src="js/app.js"></script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to the board</a>
+    <div class="backdrop" aria-hidden="true"></div>
+    <header class="masthead">
+      <a class="mark" href="#play" aria-label="Fifteen Press, play">15</a>
+      <nav class="drawers" aria-label="Sections">
+        <a href="#play" data-view="play">Play</a>
+        <a href="#versus" data-view="versus">1v1</a>
+        <a href="#blind" data-view="blind">Blind</a>
+        <a href="#train" data-view="train">Train</a>
+        <a href="#solves" data-view="solves">Solves</a>
+        <a href="#stats" data-view="stats">Stats</a>
+        <div class="drawer-more">
+          <button type="button" class="drawer-more-btn" aria-label="More sections" aria-haspopup="true" aria-expanded="false" aria-controls="drawer-menu">More</button>
+          <div class="drawer-menu" id="drawer-menu">
+            <a href="#proofs" data-view="proofs">Proofs</a>
+            <a href="#lab" data-view="lab">Lab</a>
+            <a href="#leaders" data-view="leaders">Leaders</a>
+          </div>
+        </div>
+        <a class="drawer-end" href="#settings" data-view="settings">Settings</a>
+      </nav>
+      <button
+        class="player-chip"
+        type="button"
+        data-action="profiles"
+        aria-label="Account and players"
+      ></button>
+      <div class="winbtns">
+        <button type="button" data-win="minimize" aria-label="Minimize" title="minimize">
+          <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M0 5.5h10" /></svg>
+        </button>
+        <button type="button" data-win="toggle" aria-label="Full size or back to a window" title="full size">
+          <svg class="to-max" viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M.5.5h9v9h-9z" /></svg>
+          <svg class="to-restore" viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M.5 2.5h7v7h-7zM2.5 2.5v-2h7v7h-2" /></svg>
+        </button>
+        <button type="button" data-win="close" aria-label="Close" title="close">
+          <svg class="x" viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M.5.5l9 9M9.5.5l-9 9" /></svg>
+        </button>
+      </div>
+    </header>
+    <main id="main">
+      <section
+        class="view"
+        id="view-play"
+        data-view="play"
+        aria-label="Play"
+      ></section>
+      <section
+        class="view"
+        id="view-blind"
+        data-view="blind"
+        aria-label="Blind"
+        hidden
+      ></section>
+      <section
+        class="view"
+        id="view-versus"
+        data-view="versus"
+        aria-label="1v1"
+        hidden
+      ></section>
+      <section
+        class="view"
+        id="view-train"
+        data-view="train"
+        aria-label="Train"
+        hidden
+      ></section>
+      <section
+        class="view"
+        id="view-solves"
+        data-view="solves"
+        aria-label="Solves"
+        hidden
+      ></section>
+      <section
+        class="view"
+        id="view-lab"
+        data-view="lab"
+        aria-label="Lab"
+        hidden
+      ></section>
+      <section
+        class="view"
+        id="view-proofs"
+        data-view="proofs"
+        aria-label="Proofs"
+        hidden
+      ></section>
+      <section
+        class="view"
+        id="view-stats"
+        data-view="stats"
+        aria-label="Stats"
+        hidden
+      ></section>
+      <section
+        class="view"
+        id="view-leaders"
+        data-view="leaders"
+        aria-label="Leaderboards"
+        hidden
+      ></section>
+      <section
+        class="view"
+        id="view-settings"
+        data-view="settings"
+        aria-label="Settings"
+        hidden
+      ></section>
+    </main>
+    <div class="toast" role="status" aria-live="polite" hidden></div>
+    <dialog class="sheet" id="dialog"></dialog>
+  </body>
+</html>
