@@ -11,7 +11,8 @@ const MAX_LOG = 600;
 
 export const SIZES = [3, 4, 5];
 export const TARGETS = [0, 2, 3, 5, 7]; // first to this many rounds, 0 = single rounds
-export const LEADS = [3, 5]; // countdown seconds
+export const LEADS = [3, 5, 10, 15]; // countdown seconds
+export const LEADS_OLD = [3, 5]; // all that 5.8.0 knows
 
 function blank() {
   return {
@@ -22,7 +23,8 @@ function blank() {
     matches: { w: 0, l: 0 },
     friends: [],
     prefs: { sounds: true, fx: true, online: true },
-    room: { N: 4, to: 0, lead: 3, peek: false, rated: true },
+    room: { N: 4, to: 0, lead: 3, peek: true, rated: true },
+    rev: 1, // 1 = 5.8.1: the board is on show during the countdown unless it was turned off since
   };
 }
 
@@ -91,6 +93,7 @@ export function load() {
           .map((f) => ({ fc: f.fc, name: cleanName(f.name), elo: f.elo != null ? cleanElo(f.elo) : null, added: Number(f.added) || 0, told: !!f.told }));
       if (raw.prefs) for (const k of Object.keys(d.prefs)) if (typeof raw.prefs[k] === "boolean") d.prefs[k] = raw.prefs[k];
       d.room = cleanRoom(raw.room, d.room);
+      if ((raw.rev | 0) < 1) d.room.peek = true; // saved by 5.8.0, where hidden was only the default
     }
   } catch (e) {
     /* nothing saved yet, or a private window */

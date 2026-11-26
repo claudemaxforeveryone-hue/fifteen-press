@@ -4269,13 +4269,20 @@ td.act {
 .vs-around {
   margin-top: 16px;
 }
-/* with the board on show the count steps aside, so the scramble can be read */
+/* with the board on show nothing may cover a tile: the count moves into the clock above the board,
+   and this one stays for screen readers only */
 .vs-count.is-peek {
-  inset: 8px 8px auto auto;
-  padding: 4px 12px;
-  font-size: 40px;
-  background: var(--paper);
-  border: 1px solid var(--rule);
+  inset: auto;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  background: none;
+  border: 0;
+}
+.vs-room .timer.is-inspect {
+  color: var(--spot);
 }
 /* the call on a round, laid across the board until the next one starts */
 .vs-verdict {

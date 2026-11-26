@@ -19,7 +19,7 @@ const E = window.FifteenEngine;
 const INVITE_BASE = "https://claudemaxforeveryone-hue.github.io/fifteen-press/";
 const ID_PREFIX = "fifteen-press-1v1-";
 const CODE_LEN = 5;
-const PROTOCOL = 2; // 1 = 5.7.0: no room options, no ratings
+const PROTOCOL = 3; // 1 = 5.7.0: no room options, no ratings. 2 = 5.8.0: countdown of 3 or 5 s only
 const CHATTER = new Set(["hb", "p", "ack", "ping", "pong"]); // fine to lose one of these
 const RESEND = 600; // an unconfirmed message goes out again after this long
 const BEAT = 2000; // each side says "still here" this often
@@ -65,7 +65,7 @@ function isBoard(b, N) {
 const cleanName = D.cleanName;
 const signed = (n) => (n > 0 ? "+" + n : String(n));
 const about = (ms) => (ms < 10000 ? (ms / 1000).toFixed(1) : String(Math.round(ms / 1000))) + " s";
-const roomWords = (room) => [`${room.N}x${room.N}`, room.to ? `first to ${room.to}` : "single rounds", `${room.lead} s countdown`, room.peek ? "board shown early" : null, room.rated ? "rated" : "not rated"].filter(Boolean).join(" · ");
+const roomWords = (room) => [`${room.N}x${room.N}`, room.to ? `first to ${room.to}` : "single rounds", room.peek ? `${room.lead} s inspection` : `${room.lead} s countdown, board hidden`, room.rated ? "rated" : "not rated"].filter(Boolean).join(" · ");
 
 function toggle(label, value, onChange, hint, disabled) {
   const cb = h("input", { type: "checkbox", checked: !!value, disabled: !!disabled });
@@ -144,7 +144,11 @@ export class VersusView {
   }
   // the options in force: a friend still on 5.7.0 only knows single rounds with a 3 second countdown
   get rules() {
-    return this.role === "host" && !this.bot && this.oppV < 2 ? Object.assign({}, this.room, LEGACY_ROOM) : this.room;
+    if (this.role !== "host" || this.bot) return this.room;
+    if (this.oppV < 2) return Object.assign({}, this.room, LEGACY_ROOM);
+    // 5.8.0 counts down 3 s for any length it does not know, so it is never sent a longer one
+    if (this.oppV < 3 && !D.LEADS_OLD.includes(this.room.lead)) return Object.assign({}, this.room, { lead: 5 });
+    return this.room;
   }
   sfx(name, ...args) {
     if (this.prefs.sounds) audio[name](...args);
@@ -1489,7 +1493,7 @@ export class VersusView {
     if (this.phase === "waiting") {
       text = this.note || (this.role === "host" ? "Send your friend the code or the link. The race starts when you are both ready." : "Connecting to the room…");
     } else if (this.phase === "countdown") {
-      text = this.rules.peek ? "Same scramble for both of you. Read it now, the clock starts at zero." : "Same scramble for both of you. Get ready.";
+      text = this.rules.peek ? "Same scramble for both of you. Plan your start, the clock starts at zero." : "Same scramble for both of you. Get ready.";
     } else if (this.phase === "racing" && r) {
       if (r.me.status === "solving") {
         if (r.winner === "opp") {
@@ -1576,7 +1580,7 @@ export class VersusView {
     const mine = this.role === "host" && (this.phase === "idle" || this.phase === "waiting");
     const legacy = !this.bot && this.oppV < 2 && !!this.oppName;
     if (!mine) {
-      el.append(h("span", { class: "label" }, "room"), h("p", { class: "hint-text vs-roomwords" }, roomWords(Object.assign({}, this.room, { rated: this.ratedNow() }))));
+      el.append(h("span", { class: "label" }, "room"), h("p", { class: "hint-text vs-roomwords" }, roomWords(Object.assign({}, this.rules, { rated: this.ratedNow() }))));
       return;
     }
     const pick = (key) => (value) => this.setRoom(key, value);
@@ -1584,6 +1588,7 @@ export class VersusView {
       h("div", { class: "vs-opt" }, h("span", { class: "label" }, "board"), seg(D.SIZES.map((n) => ({ value: n, label: `${n}x${n}` })), this.room.N, pick("N"), "Board size")),
     );
     if (legacy) return;
+    const leads = !this.bot && this.oppName && this.oppV < 3 ? D.LEADS_OLD : D.LEADS;
     el.append(
       h(
         "div",
@@ -1591,8 +1596,8 @@ export class VersusView {
         h("span", { class: "label" }, "first to"),
         seg(D.TARGETS.map((n) => ({ value: n, label: n ? String(n) : "off", title: n ? `a match is first to ${n} rounds` : "single rounds, no match" })), this.room.to, pick("to"), "Match length"),
       ),
-      h("div", { class: "vs-opt" }, h("span", { class: "label" }, "countdown"), seg(D.LEADS.map((n) => ({ value: n, label: `${n} s` })), this.room.lead, pick("lead"), "Countdown")),
-      toggle("Show the board during the countdown", this.room.peek, pick("peek"), "Time to read the scramble before the clock starts."),
+      h("div", { class: "vs-opt" }, h("span", { class: "label" }, this.room.peek ? "inspection" : "countdown"), seg(leads.map((n) => ({ value: n, label: `${n} s` })), this.rules.lead, pick("lead"), "Countdown")),
+      toggle("Show the board during the countdown", this.room.peek, pick("peek"), "Inspection time: read the scramble and plan before the clock starts."),
       this.bot ? null : toggle("Rated", this.room.rated, pick("rated"), "Rounds move both players' rating against friends."),
     );
   }
@@ -1781,6 +1786,7 @@ export class VersusView {
     this.goAt = performance.now() + lead;
     this.countEl.hidden = false;
     this.countEl.classList.toggle("is-peek", !covered);
+    this.timeEl.classList.toggle("is-inspect", !covered);
     this.countEl.textContent = "";
     this.refresh();
     const tick = () => {
@@ -1790,7 +1796,8 @@ export class VersusView {
       const shown = String(Math.ceil(left / 1000));
       if (this.countEl.textContent !== shown) {
         this.countEl.textContent = shown;
-        this.sfx("count", shown === "1");
+        if (!covered) this.timeEl.textContent = shown; // the inspection counts down in the clock, off the board
+        if (left <= 3000) this.sfx("count", shown === "1"); // a long inspection stays quiet until the last three
       }
       this.later(tick, Math.min(50, left));
     };
@@ -1803,6 +1810,8 @@ export class VersusView {
     r.goAt = this.goAt;
     this.countEl.hidden = true;
     this.countEl.textContent = "";
+    this.timeEl.classList.remove("is-inspect");
+    this.timeEl.textContent = fmtTime(0);
     this.view.setHidden(false);
     this.oppView.setHidden(false);
     if (!this.rules.peek) this.view.enter();
@@ -2022,6 +2031,10 @@ export class VersusView {
     if (this.countEl) {
       this.countEl.hidden = true;
       this.countEl.textContent = "";
+    }
+    if (this.timeEl && this.timeEl.classList.contains("is-inspect")) {
+      this.timeEl.classList.remove("is-inspect");
+      this.timeEl.textContent = fmtTime(0);
     }
     if (this.view) {
       this.view.setRunning(false);
