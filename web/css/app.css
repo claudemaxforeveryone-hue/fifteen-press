@@ -3888,3 +3888,258 @@ td.act {
 .tools-more > .filters {
   margin: 12px 0 0;
 }
+
+/* ---------- 1v1 ---------- */
+/* two boards, one scramble: yours large in the middle, your friend's small at the side */
+
+#view-versus {
+  max-width: 1080px;
+}
+.vs-lobby {
+  max-width: 720px;
+  margin: 0 auto;
+}
+.vs-lede {
+  max-width: 62ch;
+  margin: -12px 0 24px;
+}
+.vs-field {
+  max-width: 280px;
+  margin-bottom: 24px;
+}
+.vs-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 32px;
+  border-top: 1px solid var(--rule);
+  padding-top: 24px;
+}
+.vs-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.vs-code-input {
+  width: 100%;
+  max-width: 280px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+.vs-code-input::placeholder {
+  text-transform: lowercase;
+  letter-spacing: 0;
+}
+.vs-note {
+  min-height: 20px;
+  margin: 24px 0 0;
+  font-size: 14px;
+  color: var(--spot);
+}
+.vs-rivals {
+  margin-top: 32px;
+}
+.vs-rivals .label {
+  margin-bottom: 8px;
+}
+
+.vs-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px 24px;
+  padding-bottom: 12px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--rule);
+}
+.vs-score {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  min-width: 0;
+}
+.vs-who {
+  font-size: 14px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 22ch;
+}
+.vs-points {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font: 400 32px/1 var(--figures);
+  letter-spacing: -0.02em;
+}
+.vs-points b {
+  font-weight: 400;
+}
+.vs-points b.is-up {
+  color: var(--spot);
+}
+.vs-points i {
+  font-style: normal;
+  color: var(--faint);
+}
+.vs-roomline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vs-codechip {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+  min-height: 28px;
+  padding: 0 12px;
+  font: 600 14px/1 var(--figures);
+  letter-spacing: 0.14em;
+  cursor: pointer;
+  transition: border-color 150ms var(--ease-out);
+}
+.vs-codechip:hover {
+  border-color: var(--spot);
+}
+
+.vs-grid {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(220px, 300px);
+  justify-content: center;
+  gap: 48px;
+  align-items: start;
+}
+.vs-main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  width: clamp(360px, calc(100vh - 400px), 580px);
+  max-width: 100%;
+  min-width: 0;
+}
+.vs-ticket {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.vs-board {
+  position: relative;
+}
+.vs-count {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  font: 400 clamp(72px, 16vh, 128px)/1 var(--figures);
+  color: var(--spot);
+  pointer-events: none;
+}
+.vs-count[hidden] {
+  display: none;
+}
+.vs-status {
+  width: 100%;
+  min-height: 42px;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.vs-status[data-tone="good"] {
+  color: var(--spot);
+}
+.vs-status[data-tone="bad"] {
+  color: var(--ink-3);
+}
+.vs-actions {
+  width: 100%;
+  min-height: 36px;
+}
+.vs-side {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+}
+.vs-opp {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.vs-opp-board {
+  width: min(100%, 240px);
+}
+.vs-opp-state {
+  min-height: 20px;
+  font-size: 14px;
+  color: var(--ink-3);
+}
+.vs-size {
+  gap: 16px;
+}
+.vs-history {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.vs-history .hint-text {
+  margin: 0;
+}
+.vs-ledger td,
+.vs-ledger th {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.vs-ledger td.is-win {
+  color: var(--spot);
+}
+@media (max-width: 860px) {
+  .vs-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 32px;
+  }
+  .vs-main {
+    width: min(100%, max(300px, calc(100vh - 400px)), 580px);
+    justify-self: center;
+  }
+  .vs-opp-board {
+    width: min(100%, 180px);
+  }
+}
+.vs-invite {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 0 4px;
+  border-top: 1px solid var(--rule);
+}
+.vs-invite[hidden] {
+  display: none;
+}
+.vs-bigcode {
+  font: 400 clamp(40px, 6vh, 56px)/1.1 var(--figures);
+  letter-spacing: 0.14em;
+  color: var(--spot);
+  user-select: all;
+  -webkit-user-select: all;
+  margin-bottom: 8px;
+}
+.vs-link {
+  font-size: 12px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  user-select: all;
+  -webkit-user-select: all;
+}
+/* nobody to race yet: the code takes the board's place */
+.vs-room.is-inviting .vs-ticket,
+.vs-room.is-inviting .vs-board,
+.vs-room.is-inviting .vs-opp {
+  display: none;
+}
+.vs-room.is-inviting .vs-invite {
+  border-top: 0;
+  padding-top: 0;
+}

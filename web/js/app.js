@@ -17,6 +17,7 @@ import { SettingsView } from "./views/settings.js";
 import { TrainView } from "./views/train.js";
 import { SolvesView } from "./views/solves.js";
 import { BlindView } from "./views/blind.js";
+import { VersusView } from "./views/versus.js";
 
 const app = {
   views: {},
@@ -130,7 +131,7 @@ function route() {
   document.title =
     target === "play"
       ? "Fifteen Press"
-      : `${target[0].toUpperCase() + target.slice(1)} · Fifteen Press`;
+      : `${target === "versus" ? "1v1" : target[0].toUpperCase() + target.slice(1)} · Fifteen Press`;
 }
 
 function showKeys() {
@@ -198,6 +199,7 @@ function boot() {
   app.views.train = new TrainView(document.getElementById("view-train"), ctx);
   app.views.solves = new SolvesView(document.getElementById("view-solves"), ctx);
   app.views.blind = new BlindView(document.getElementById("view-blind"), ctx);
+  app.views.versus = new VersusView(document.getElementById("view-versus"), ctx);
   app.views.settings = new SettingsView(
     document.getElementById("view-settings"),
     ctx,

@@ -99,7 +99,7 @@ function createWindow() {
           const res = await v.engine.run('solve', { board: v.game.board.slice(), N: 4, timeLimit: 20000 });
           // walk every page once, then run the coach and one drill rep
           const pages = {};
-          for (const name of ['train', 'blind', 'solves', 'stats/visual', 'stats/all', 'settings', 'play']) {
+          for (const name of ['train', 'blind', 'versus', 'solves', 'stats/visual', 'stats/all', 'settings', 'play']) {
             location.hash = name;
             await new Promise((r) => setTimeout(r, 350));
             pages[name] = document.querySelector('.view:not([hidden])').childElementCount;
