@@ -299,3 +299,70 @@ export function preview() {
     }, i * 110),
   );
 }
+
+/* ---------- 1v1 ---------- */
+// The race has its own few sounds on top of the tile clicks: the countdown, the result, a friend at the door.
+
+/** One second of the countdown going by. `last` is the final second before the board shows. */
+export function count(last = false) {
+  if (!enabled) return;
+  const c = ac();
+  if (!c) return;
+  mallet(c, last ? 659.25 : 440, last ? 0.2 : 0.16, 0, 0, 0.22);
+}
+
+/** The board is showing: go. */
+export function go() {
+  if (!enabled) return;
+  const c = ac();
+  if (!c) return;
+  mallet(c, 880, 0.22, 0, 0, 0.5);
+  mallet(c, 1318.5, 0.14, 0.02, 0, 0.5);
+  burst(c, { freq: 180, q: 1.2, dur: 0.18, gain: 0.5 });
+}
+
+/** A round won: four notes up. */
+export function win() {
+  if (!enabled) return;
+  const c = ac();
+  if (!c) return;
+  [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => mallet(c, f, 0.2, i * 0.085, (i - 1.5) * 0.18, 0.7));
+}
+
+/** A round lost: two notes down, soft. */
+export function lose() {
+  if (!enabled) return;
+  const c = ac();
+  if (!c) return;
+  tone(c, { freq: 392, dur: 0.26, gain: 0.16, type: "triangle", drop: 0.94, reverb: true });
+  tone(c, { freq: 293.66, dur: 0.5, gain: 0.16, when: 0.2, type: "triangle", drop: 0.9, reverb: true });
+}
+
+/** A whole match won: the run up, then the chord held. */
+export function fanfare() {
+  if (!enabled) return;
+  const c = ac();
+  if (!c) return;
+  [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((f, i) => mallet(c, f, 0.2, i * 0.09, (i - 2) * 0.16, 0.8));
+  [523.25, 783.99, 1046.5, 1318.5].forEach((f, i) => mallet(c, f, 0.16, 0.62, (i - 1.5) * 0.22, 1.6));
+  burst(c, { freq: 160, q: 1.1, dur: 0.3, gain: 0.5, when: 0.62 });
+}
+
+/** Somebody sat down in the room: two knocks. */
+export function knock() {
+  if (!enabled) return;
+  const c = ac();
+  if (!c) return;
+  for (const when of [0, 0.13]) {
+    burst(c, { freq: 900, q: 5, dur: 0.05, gain: 0.5, when });
+    tone(c, { freq: 220, dur: 0.07, gain: 0.2, when, drop: 0.6 });
+  }
+}
+
+/** A friend is asking for a race: a three note call, twice. */
+export function ring() {
+  if (!enabled) return;
+  const c = ac();
+  if (!c) return;
+  for (const start of [0, 0.62]) [659.25, 783.99, 987.77].forEach((f, i) => mallet(c, f, 0.18, start + i * 0.11, 0, 0.5));
+}

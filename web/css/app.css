@@ -3896,7 +3896,7 @@ td.act {
   max-width: 1080px;
 }
 .vs-lobby {
-  max-width: 720px;
+  max-width: 780px;
   margin: 0 auto;
 }
 .vs-lede {
@@ -4142,4 +4142,261 @@ td.act {
 .vs-room.is-inviting .vs-invite {
   border-top: 0;
   padding-top: 0;
+}
+
+/* 1v1, 5.8: ratings, the four lobby sections, friends, engines, room options, the result and the paper */
+.vs-ratings {
+  display: flex;
+  gap: 32px;
+}
+.vs-rating {
+  text-align: right;
+}
+.vs-tabs {
+  margin-bottom: 24px;
+}
+.vs-section {
+  margin-top: 32px;
+}
+.vs-section > .label {
+  display: block;
+  margin-bottom: 8px;
+}
+.vs-friendlist td {
+  vertical-align: middle;
+}
+.vs-friend-name {
+  overflow-wrap: anywhere;
+}
+/* lit while there is an open line to that friend */
+.vs-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 10px;
+  background: var(--rule);
+}
+.vs-dot[data-on] {
+  background: var(--spot);
+}
+.vs-friend-elo,
+.vs-friend-rec {
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.ledger td.vs-friend-act {
+  text-align: right;
+  white-space: nowrap;
+}
+.vs-friend-act > * + * {
+  margin-left: 8px;
+}
+.vs-addfriend {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+.vs-mycode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.vs-presence {
+  margin: 12px 0 0;
+}
+.vs-enginebar {
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.vs-level {
+  margin-left: 10px;
+}
+.vs-statsbar {
+  margin-bottom: 24px;
+}
+.vs-statcols {
+  gap: 32px 48px;
+}
+.vs-chart {
+  margin-top: 16px;
+}
+.vs-chartkey {
+  margin: 4px 0 0;
+}
+.vs-lobby .ledger td.is-win {
+  color: var(--spot);
+}
+.vs-options {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 62ch;
+  margin: 0 0 24px;
+}
+.vs-who {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.vs-elo {
+  font-size: 12px;
+  color: var(--faint);
+}
+.vs-target {
+  align-self: center;
+}
+.vs-opp-tools {
+  min-height: 0;
+}
+.vs-roomopts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.vs-opt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+.vs-roomwords {
+  margin: 0;
+  line-height: 1.5;
+}
+.vs-around {
+  margin-top: 16px;
+}
+/* with the board on show the count steps aside, so the scramble can be read */
+.vs-count.is-peek {
+  inset: 8px 8px auto auto;
+  padding: 4px 12px;
+  font-size: 40px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+}
+/* the call on a round, laid across the board until the next one starts */
+.vs-verdict {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  translate: 0 -50%;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px 12px;
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  pointer-events: none;
+  animation: vs-verdict-in 200ms var(--ease-out);
+}
+.vs-verdict[hidden] {
+  display: none;
+}
+.vs-verdict.is-quiet,
+.motion-reduced .vs-verdict {
+  animation: none;
+}
+@keyframes vs-verdict-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+.vs-verdict-word {
+  font: italic 400 clamp(28px, 5vh, 44px)/1.1 var(--display);
+  font-variation-settings:
+    "SOFT" 100,
+    "opsz" 144;
+  letter-spacing: -0.02em;
+  text-transform: lowercase;
+  color: var(--ink);
+}
+.vs-verdict[data-tone="good"] .vs-verdict-word {
+  color: var(--spot);
+}
+.vs-verdict[data-tone="bad"] .vs-verdict-word {
+  color: var(--ink-3);
+}
+.vs-verdict-sub {
+  font: 400 20px/1.2 var(--figures);
+}
+.vs-verdict-elo {
+  font-size: 14px;
+  color: var(--ink-3);
+}
+.vs-verdict-elo b {
+  font-weight: 400;
+  color: var(--ink);
+}
+.vs-verdict-elo span[data-up] {
+  color: var(--spot);
+}
+/* a challenge or a friend request, answerable from any page */
+.vs-notices {
+  position: fixed;
+  top: 56px;
+  left: 50%;
+  translate: -50% 0;
+  z-index: 65;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(440px, calc(100vw - 2 * var(--gutter)));
+  pointer-events: none;
+}
+.vs-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+  padding: 12px 16px;
+  background: var(--paper-2);
+  border: 1px solid var(--spot);
+  pointer-events: auto;
+  animation: toast-in 180ms var(--ease-out);
+}
+.vs-notice-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 14px;
+}
+.vs-notice-text b {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.vs-notice-text span {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.vs-notice-actions {
+  display: flex;
+  gap: 8px;
+}
+.vs-confetti {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 64;
+  pointer-events: none;
+}
+@media (max-width: 620px) {
+  .vs-ratings {
+    gap: 20px;
+  }
+  .vs-friend-rec,
+  .vs-ladder th:nth-child(5),
+  .vs-ladder td:nth-child(5) {
+    display: none;
+  }
 }

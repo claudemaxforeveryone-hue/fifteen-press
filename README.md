@@ -12,7 +12,7 @@ Nothing to download. This is the same game as the exe.
 ## Download
 
 1. Go to [Releases](../../releases/latest).
-2. Download `FifteenPress-portable-v5.7.0.exe`.
+2. Download `FifteenPress-portable-v5.8.0.exe`.
 3. Double-click it. There is nothing to install.
 
 Windows 10 or 11, 64-bit.
@@ -30,7 +30,16 @@ run it. In that case use "Run from source" below.
 - **1v1**: race a friend live on the same scramble. One of you makes a room and sends
   the five letter code or the link, the other joins from the exe or the website. The
   board stays hidden through a countdown, you see each other's board move as you
-  solve, and the score carries from round to round.
+  solve, and the score carries from round to round. Whoever makes the room picks the
+  board size, a match length (first to 2, 3, 5 or 7), the countdown, whether the board
+  shows during it, and whether the rounds are rated.
+- **Friends**: every device has a friend code. Swap codes or friend links once, and
+  after that you see who is online and challenge them with one press.
+- **Engines**: eleven engine opponents from 400 to 2500, always there and offline, for
+  when nobody is around.
+- **Ratings and stats**: an Elo rating against friends and a separate one against
+  engines, plus win rate, streaks, times by board size, head to head and the latest
+  rounds.
 - **Play**: timed solves on several board sizes, keyboard or mouse, a dozen themes.
 - **Practice and coach**: a practice mode where a coach shows the best next move.
 - **Train**: short drills for the parts of a solve.
@@ -56,8 +65,15 @@ internet. Players and solves are saved in the app's own data folder.
 [PeerJS](https://peerjs.com)). The public PeerJS server introduces the two computers
 using the room code, and when a direct line is not possible it relays the moves. As
 with any direct connection, each player's computer learns the other's IP address.
-What is sent: the name you typed, your moves and your times. Nothing is stored
-online, and the head to head record is kept on your own device.
+What is sent: the name you typed, your friend code, your rating, your moves and your
+times. Nothing is stored online, and ratings, results and the friends list are kept on
+your own device.
+
+Friends work the same way. While the app is open, and once you have opened 1v1 or
+saved a friend, it listens on the PeerJS server under your friend code so friends can
+see you are online and challenge you. Anyone who has your friend code can see your
+name, your rating and whether you are online. Turn this off under 1v1, Options
+("Show me online to friends"). Room codes and engines keep working.
 
 ## Run from source
 
