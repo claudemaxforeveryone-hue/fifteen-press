@@ -12,7 +12,7 @@ Nothing to download. This is the same game as the exe.
 ## Download
 
 1. Go to [Releases](../../releases/latest).
-2. Download `FifteenPress-portable-v5.8.0.exe`.
+2. Download `FifteenPress-portable-v5.8.1.exe`.
 3. Double-click it. There is nothing to install.
 
 Windows 10 or 11, 64-bit.
